@@ -22,9 +22,9 @@ if __name__ == "__main__":
     vocab_tgt = Vocabulary(freq_threshold=1)
     # Build vocab từ dữ liệu train
     vocab_src.build_vocabulary(train_src, lang='vi')
-    vocab_src.save_vocab('data/vocab_src.json')
+    vocab_src.save_vocab('data/vocab0/vocab_src.json')
 
     vocab_tgt.build_vocabulary(train_tgt, lang='en')
-    vocab_tgt.save_vocab('data/vocab_tgt.json')
+    vocab_tgt.save_vocab('data/vocab0/vocab_tgt.json')
 
     print(f"Vocab Source: {len(vocab_src)} | Vocab Target: {len(vocab_tgt)}")

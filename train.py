@@ -16,52 +16,6 @@ from utils.dataset import BilingualDataset, Collate
 from utils.tokenizer import Vocabulary
 
 
-# def train_epoch(model, iterator, optimizer, criterion, clip, device):
-#     """
-#     Hàm huấn luyện cho 1 Epoch (duyệt qua toàn bộ dữ liệu 1 lần)
-#     """
-#     model.train() # Chuyển sang chế độ training (bật Dropout)
-#     epoch_loss = 0
-#
-#     scaler = GradScaler()
-#
-#     for i, (src, tgt) in enumerate(iterator):
-#         src = src.to(device)
-#         tgt = tgt.to(device)
-#
-#         # Decoder Input: Bỏ token cuối cùng <eos>
-#         tgt_input = tgt[:, :-1]
-#
-#         # Target Output: Bỏ token đầu tiên <sos> (đây là cái ta muốn model đoán)
-#         tgt_output = tgt[:, 1:]
-#
-#         optimizer.zero_grad() # Xóa gradient cũ
-#
-#         # Forward pass
-#         # output shape: (batch_size, tgt_len - 1, output_dim)
-#         output = model(src, tgt_input)
-#
-#         # Reshape để tính Loss
-#         output_dim = output.shape[-1]
-#         output = output.contiguous().view(-1, output_dim)
-#         tgt_output = tgt_output.contiguous().view(-1)
-#
-#         # Tính Loss (Cross Entropy)
-#         loss = criterion(output, tgt_output)
-#
-#         # Backward pass
-#         loss.backward()
-#
-#         # Cắt gradient (Gradient Clipping) để tránh bùng nổ gradient
-#         torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
-#
-#         # Cập nhật trọng số
-#         optimizer.step()
-#
-#         epoch_loss += loss.item()
-#
-#     return epoch_loss / len(iterator)
-
 
 def train_epoch(model, iterator, optimizer, criterion, clip, device):
     model.train()
@@ -199,15 +153,6 @@ def run_training():
     CLIP = 1
     LR = 0.0001
 
-    # # 2. Chuẩn bị Dữ liệu (Giả lập hoặc Load thật)
-    # print("--- Đang chuẩn bị dữ liệu ---")
-    # # LƯU Ý: Ở đây cậu thay bằng code load file IWSLT thật
-    # # Demo dữ liệu giả để code chạy được ngay
-    # train_src = ["tôi là sinh viên", "máy học rất thú vị"] * 50
-    # train_tgt = ["i am a student", "machine learning is interesting"] * 50
-    # val_src = ["tôi đi học", "xin chào"] * 10
-    # val_tgt = ["i go to school", "hello"] * 10
-
     def extract_data(data_split):
         src = [item['vi'] for item in data_split]
         tgt = [item['en'] for item in data_split]
@@ -218,8 +163,8 @@ def run_training():
     vocab_src = Vocabulary(freq_threshold=1)
     vocab_tgt = Vocabulary(freq_threshold=1)
     # Build vocab từ dữ liệu train
-    vocab_src.load_vocab('data/vocab_src.json')
-    vocab_tgt.load_vocab('data/vocab_tgt.json')
+    vocab_src.load_vocab('data/vocab0/vocab_src.json')
+    vocab_tgt.load_vocab('data/vocab0/vocab_tgt.json')
 
     print(f"Vocab Source: {len(vocab_src)} | Vocab Target: {len(vocab_tgt)}")
     dataset= load_from_disk("data/iwslt2015_data")
