@@ -90,8 +90,8 @@ def load_model_and_translate():
 
     # Đường dẫn này phải trỏ đúng đến file vocab bạn đã tạo (thường ở thư mục data/)
     try:
-        vocab_src.load_vocab('data/vocab_src.json')
-        vocab_tgt.load_vocab('data/vocab_tgt.json')
+        vocab_src.load_vocab('data/vocab0/vocab_src.json')
+        vocab_tgt.load_vocab('data/vocab0/vocab_tgt.json')
     except FileNotFoundError:
         print("Lỗi: Không tìm thấy file từ điển (.json). Hãy đảm bảo bạn đã chạy build_vocab.py hoặc train.py trước.")
         return
