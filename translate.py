@@ -247,7 +247,7 @@ def load_model_and_translate():
         except Exception as e:
             print(f"Lỗi: {e}")
 
-def blue_scor():
+def blue_score():
     # 1. Cấu hình thiết bị
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device đang dùng: {device}")
@@ -335,5 +335,5 @@ def blue_scor():
 
 if __name__ == "__main__":
     load_model_and_translate()
-    blue_scor()
+    blue_score()
 

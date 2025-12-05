@@ -1,2 +1,9 @@
 venv/
-transformer_model.pt
+*.pt
+*.pth
+
+__pycache__/
+*.py[cod]
+
+# Các file hệ thống
+.DS_Store
