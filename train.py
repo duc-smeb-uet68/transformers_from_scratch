@@ -6,6 +6,7 @@ import time
 import math
 import matplotlib.pyplot as plt
 import os
+import numpy as np  # Thêm numpy
 from datasets import load_from_disk, load_dataset
 from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
@@ -16,14 +17,47 @@ from utils.dataset import BilingualDataset, Collate
 from utils.tokenizer import Vocabulary
 
 
-# --- 1. CLASS SCHEDULER (MỚI) ---
-class TransformerScheduler:
-    """
-    Learning Rate Scheduler chuẩn của Transformer.
-    LR tăng dần trong giai đoạn warmup và giảm dần sau đó.
-    Công thức: lr = d_model^(-0.5) * min(step^(-0.5), step * warmup^(-1.5))
-    """
+# --- 1. CLASS EARLY STOPPING (MỚI - QUAN TRỌNG) ---
+class EarlyStopping:
+    """Dừng train nếu validation loss không cải thiện sau một số epoch nhất định."""
 
+    def __init__(self, patience=5, delta=0, path='transformer_best.pt', verbose=True):
+        self.patience = patience
+        self.delta = delta
+        self.path = path
+        self.verbose = verbose
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.val_loss_min = np.Inf
+
+    def __call__(self, val_loss, model):
+        score = -val_loss
+
+        if self.best_score is None:
+            self.best_score = score
+            self.save_checkpoint(val_loss, model)
+        elif score < self.best_score + self.delta:
+            self.counter += 1
+            if self.verbose:
+                print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.save_checkpoint(val_loss, model)
+            self.counter = 0
+
+    def save_checkpoint(self, val_loss, model):
+        '''Lưu model khi validation loss giảm.'''
+        if self.verbose:
+            print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
+        torch.save(model.state_dict(), self.path)
+        self.val_loss_min = val_loss
+
+
+# --- 2. CLASS SCHEDULER (GIỮ NGUYÊN) ---
+class TransformerScheduler:
     def __init__(self, optimizer, d_model, warmup_steps=4000, factor=1.0):
         self.optimizer = optimizer
         self.d_model = d_model
@@ -33,7 +67,6 @@ class TransformerScheduler:
         self._rate = 0
 
     def step(self):
-        "Cập nhật learning rate và bước nhảy"
         self.current_step += 1
         rate = self.rate()
         for p in self.optimizer.param_groups:
@@ -41,10 +74,9 @@ class TransformerScheduler:
         self._rate = rate
 
     def rate(self, step=None):
-        "Tính toán learning rate hiện tại"
         if step is None:
             step = self.current_step
-        if step == 0: step = 1  # Tránh chia cho 0
+        if step == 0: step = 1
         return self.factor * (self.d_model ** (-0.5) *
                               min(step ** (-0.5), step * self.warmup_steps ** (-1.5)))
 
@@ -52,88 +84,71 @@ class TransformerScheduler:
         self.optimizer.zero_grad()
 
 
-# --- 2. HÀM TRAIN 1 EPOCH ---
-def train_epoch(model, iterator, optimizer, scheduler, criterion, clip, device):
+# --- 3. HÀM TRAIN 1 EPOCH (CÓ CHECK NaN) ---
+def train_epoch(model, iterator, optimizer, scheduler, criterion, clip, device, scaler):
     model.train()
     epoch_loss = 0
 
-    # Khởi tạo Scaler cho Mixed Precision Training (tăng tốc GPU)
-    scaler = GradScaler()
-
+    # Progress bar
     progress_bar = tqdm(iterator, desc="Training", leave=False)
 
-    for i, (src, tgt) in enumerate(iterator):
+    for i, (src, tgt) in enumerate(progress_bar):
         src, tgt = src.to(device), tgt.to(device)
 
-        # Target input: Bỏ token cuối (<eos>)
         tgt_input = tgt[:, :-1]
-
-        # Target output: Bỏ token đầu (<sos>) để mô hình dự đoán từ tiếp theo
         tgt_output = tgt[:, 1:]
 
-        # Reset gradients qua scheduler
         scheduler.zero_grad()
 
-        # Forward pass với autocast
         with autocast():
             output = model(src, tgt_input)
-
-            # Reshape để tính loss
-            # output: [batch_size, trg_len - 1, output_dim] -> [batch_size * (trg_len - 1), output_dim]
             output_dim = output.shape[-1]
             output = output.contiguous().view(-1, output_dim)
-
-            # tgt_output: [batch_size, trg_len - 1] -> [batch_size * (trg_len - 1)]
             tgt_output = tgt_output.contiguous().view(-1)
-
             loss = criterion(output, tgt_output)
 
-        # Backward pass với scaler
-        scaler.scale(loss).backward()
+        # --- SAFETY CHECK: Chặn loss NaN/Inf ---
+        if torch.isnan(loss) or torch.isinf(loss):
+            print(f"\n[CẢNH BÁO] Loss bị NaN hoặc Inf tại batch {i}. Bỏ qua bước cập nhật này.")
+            continue
+        # ---------------------------------------
 
-        # Unscale trước khi clip gradient để tránh bùng nổ gradient
+        scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
-
-        # Update weights và Learning Rate
         scaler.step(optimizer)
         scaler.update()
         scheduler.step()
 
         epoch_loss += loss.item()
 
-        # Update progress bar
-        progress_bar.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]['lr'])
+        # Cập nhật hiển thị
+        current_lr = optimizer.param_groups[0]['lr']
+        progress_bar.set_postfix(loss=loss.item(), lr=f"{current_lr:.2e}")
 
     return epoch_loss / len(iterator)
 
 
-# --- 3. HÀM ĐÁNH GIÁ (EVALUATE) ---
+# --- 4. HÀM ĐÁNH GIÁ (GIỮ NGUYÊN) ---
 def evaluate(model, iterator, criterion, device):
-    model.eval()  # Quan trọng: Tắt Dropout và Batch Norm
+    model.eval()
     epoch_loss = 0
-
-    with torch.no_grad():  # Không tính gradient
+    with torch.no_grad():
         for i, (src, tgt) in enumerate(iterator):
             src = src.to(device)
             tgt = tgt.to(device)
-
             tgt_input = tgt[:, :-1]
             tgt_output = tgt[:, 1:]
-
             output = model(src, tgt_input)
-
             output_dim = output.shape[-1]
             output = output.contiguous().view(-1, output_dim)
             tgt_output = tgt_output.contiguous().view(-1)
-
             loss = criterion(output, tgt_output)
             epoch_loss += loss.item()
-
     return epoch_loss / len(iterator)
 
 
-# --- 4. CÁC HÀM TIỆN ÍCH ---
+# --- 5. TIỆN ÍCH VẼ BIỂU ĐỒ ---
 def epoch_time(start_time, end_time):
     elapsed_time = end_time - start_time
     elapsed_mins = int(elapsed_time / 60)
@@ -142,11 +157,10 @@ def epoch_time(start_time, end_time):
 
 
 def save_plots(train_losses, val_losses, filename_prefix="model"):
-    """Vẽ và lưu biểu đồ Loss và Perplexity"""
     if not os.path.exists('reports'):
         os.makedirs('reports')
 
-    # 1. Vẽ Loss
+    # Vẽ Loss
     plt.figure(figsize=(10, 6))
     plt.plot(train_losses, label='Train Loss', color='blue')
     plt.plot(val_losses, label='Val Loss', color='red')
@@ -154,12 +168,20 @@ def save_plots(train_losses, val_losses, filename_prefix="model"):
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
     plt.legend()
+    plt.grid(True, alpha=0.3)  # Thêm lưới cho dễ nhìn
     plt.savefig(f'reports/{filename_prefix}_loss.png')
     plt.close()
 
-    # 2. Vẽ Perplexity (PPL = exp(loss))
-    train_ppls = [math.exp(min(l, 100)) for l in train_losses]  # min(l, 100) để tránh tràn số
-    val_ppls = [math.exp(min(l, 100)) for l in val_losses]
+    # Vẽ Perplexity
+    # Xử lý overflow cho PPL
+    def safe_exp(l):
+        try:
+            return math.exp(min(l, 50))  # Cap loss ở 50
+        except OverflowError:
+            return float('inf')
+
+    train_ppls = [safe_exp(l) for l in train_losses]
+    val_ppls = [safe_exp(l) for l in val_losses]
 
     plt.figure(figsize=(10, 6))
     plt.plot(train_ppls, label='Train PPL', color='green')
@@ -169,142 +191,114 @@ def save_plots(train_losses, val_losses, filename_prefix="model"):
     plt.ylabel('Perplexity')
     plt.yscale('log')
     plt.legend()
+    plt.grid(True, alpha=0.3)
     plt.savefig(f'reports/{filename_prefix}_ppl.png')
     plt.close()
     print(f"--> Đã lưu biểu đồ tại thư mục reports/")
 
 
-# --- 5. HÀM CHẠY CHÍNH (MAIN) ---
+# --- 6. MAIN ---
 def run_training():
-    # --- Cấu hình Hyperparameters ---
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
 
+    # --- Hyperparameters Tối Ưu ---
     BATCH_SIZE = 32
-    N_EPOCHS = 20  # Tăng lên 20 epoch để thấy hiệu quả của scheduler
-    CLIP = 1
+    N_EPOCHS = 50  # Đặt cao lên, Early Stopping sẽ tự dừng
+    CLIP = 1.0  # Gradient Clipping
+    PATIENCE = 5  # Dừng nếu Val Loss không giảm sau 5 epoch
 
-    # Model configs
     D_MODEL = 512
     N_LAYERS = 6
     N_HEADS = 8
     D_FF = 2048
     DROPOUT = 0.1
-    MAX_LEN = 128  # Giới hạn độ dài câu để tiết kiệm bộ nhớ
+    MAX_LEN = 128
 
-    # --- Load Data & Tokenizer ---
-    print("--- Đang tải dữ liệu và Tokenizer ---")
-
-    # 1. Load Tokenizer (BPE JSON files)
-    # Lưu ý: Đảm bảo bạn đã chạy build_vocab_bpe.py trước đó
+    # --- Load Data ---
+    print("--- Loading Data... ---")
     try:
         vocab_src = Vocabulary("data/vocab_bpe/tokenizer_vi.json")
         vocab_tgt = Vocabulary("data/vocab_bpe/tokenizer_en.json")
+        dataset = load_from_disk("data/iwslt2015_data")
     except Exception as e:
-        print(f"Lỗi load vocab: {e}")
-        print("Vui lòng chạy file build_vocab_bpe.py trước!")
+        print(f"Error loading data: {e}")
         return
 
-    print(f"Vocab Source Size: {len(vocab_src)}")
-    print(f"Vocab Target Size: {len(vocab_tgt)}")
+    # Extract & Create Dataset
+    train_src = [item['vi'] for item in dataset['train']]
+    train_tgt = [item['en'] for item in dataset['train']]
+    val_src = [item['vi'] for item in dataset['validation']]
+    val_tgt = [item['en'] for item in dataset['validation']]
 
-    # 2. Load Dataset
-    def extract_data(data_split):
-        src = [item['vi'] for item in data_split]
-        tgt = [item['en'] for item in data_split]
-        return src, tgt
-
-    try:
-        dataset = load_from_disk("data/iwslt2015_data")
-    except:
-        dataset = load_dataset("nguyenvuhuy/iwslt2015-en-vi")
-
-    train_src, train_tgt = extract_data(dataset['train'])
-    val_src, val_tgt = extract_data(dataset['validation'])
-
-    # 3. Tạo DataLoader
     train_dataset = BilingualDataset(train_src, train_tgt, vocab_src, vocab_tgt, max_len=MAX_LEN)
     val_dataset = BilingualDataset(val_src, val_tgt, vocab_src, vocab_tgt, max_len=MAX_LEN)
 
     collate = Collate(pad_idx=vocab_src.pad_idx)
 
+    # Tối ưu DataLoader: Tăng workers, persistent_workers
     train_iterator = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-                                collate_fn=collate, num_workers=2, pin_memory=True)
+                                collate_fn=collate, num_workers=4, pin_memory=True, persistent_workers=True)
     valid_iterator = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False,
-                                collate_fn=collate, num_workers=2, pin_memory=True)
+                                collate_fn=collate, num_workers=4, pin_memory=True, persistent_workers=True)
 
-    # --- Khởi tạo Mô hình ---
-    print("--- Khởi tạo Mô hình Transformer ---")
+    # --- Model ---
     model = Transformer(
         src_vocab_size=len(vocab_src),
         tgt_vocab_size=len(vocab_tgt),
-        d_model=D_MODEL,
-        n_layers=N_LAYERS,
-        n_heads=N_HEADS,
-        d_ff=D_FF,
-        dropout=DROPOUT,
-        max_len=5000,  # Max len positional encoding (đủ lớn)
-        src_pad_idx=vocab_src.pad_idx,
-        tgt_pad_idx=vocab_tgt.pad_idx
+        d_model=D_MODEL, n_layers=N_LAYERS, n_heads=N_HEADS, d_ff=D_FF,
+        dropout=DROPOUT, max_len=5000,
+        src_pad_idx=vocab_src.pad_idx, tgt_pad_idx=vocab_tgt.pad_idx
     ).to(device)
 
-    # Đếm số lượng tham số
-    def count_parameters(model):
-        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f'Mô hình có {sum(p.numel() for p in model.parameters() if p.requires_grad):,} tham số')
 
-    print(f'Mô hình có {count_parameters(model):,} tham số train được')
+    # --- Optimizer & Loss ---
+    # THAY ĐỔI QUAN TRỌNG: Dùng AdamW thay vì Adam để có weight decay tốt hơn
+    optimizer = optim.AdamW(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9, weight_decay=1e-4)
 
-    # --- Optimizer, Scheduler & Loss ---
-    # Adam Optimizer với các tham số chuẩn cho Transformer
-    optimizer = optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9)
-
-    # Scheduler Warmup
     scheduler = TransformerScheduler(optimizer, d_model=D_MODEL, warmup_steps=4000)
+    criterion = nn.CrossEntropyLoss(ignore_index=vocab_tgt.pad_idx, label_smoothing=0.1)
 
-    # Loss Function: Label Smoothing giúp model đỡ quá tự tin, giảm overfit
-    criterion = nn.CrossEntropyLoss(
-        ignore_index=vocab_tgt.pad_idx,
-        label_smoothing=0.1
-    )
+    # Khởi tạo Early Stopping
+    early_stopping = EarlyStopping(patience=PATIENCE, verbose=True, path='transformer_best.pt')
 
-    # --- Vòng lặp Training ---
-    best_valid_loss = float('inf')
+    # Scaler cho Mixed Precision
+    scaler = GradScaler()
+
     train_loss_history = []
     valid_loss_history = []
 
-    print(f"--- Bắt đầu Training trong {N_EPOCHS} epochs ---")
+    print(f"--- Bắt đầu Training (Max {N_EPOCHS} epochs, Patience {PATIENCE}) ---")
 
     for epoch in range(N_EPOCHS):
         start_time = time.time()
 
-        # Train & Eval
-        train_loss = train_epoch(model, train_iterator, optimizer, scheduler, criterion, CLIP, device)
+        train_loss = train_epoch(model, train_iterator, optimizer, scheduler, criterion, CLIP, device, scaler)
         valid_loss = evaluate(model, valid_iterator, criterion, device)
 
-        # Lưu lịch sử
         train_loss_history.append(train_loss)
         valid_loss_history.append(valid_loss)
 
         end_time = time.time()
         epoch_mins, epoch_secs = epoch_time(start_time, end_time)
 
-        # Lưu Checkpoint tốt nhất
-        if valid_loss < best_valid_loss:
-            best_valid_loss = valid_loss
-            torch.save(model.state_dict(), 'transformer_best.pt')
-            print(f"--> Đã lưu model tốt nhất (Val Loss: {valid_loss:.3f})")
-
-        # In kết quả
         print(f'Epoch: {epoch + 1:02} | Time: {epoch_mins}m {epoch_secs}s')
         print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {math.exp(train_loss):7.3f}')
         print(f'\t Val. Loss: {valid_loss:.3f} |  Val. PPL: {math.exp(valid_loss):7.3f}')
 
-    # --- Kết thúc ---
-    print("\n--- Hoàn tất Training ---")
-    save_plots(train_loss_history, valid_loss_history)
+        # --- GỌI EARLY STOPPING ---
+        # Nó sẽ tự lưu model nếu tốt hơn, và trả về True nếu cần dừng
+        early_stopping(valid_loss, model)
 
-    # Lưu model cuối cùng
-    torch.save(model.state_dict(), 'transformer_last.pt')
+        if early_stopping.early_stop:
+            print("--> Early stopping kích hoạt! Dừng train để tránh Overfitting/Explosion.")
+            break
+
+    save_plots(train_loss_history, valid_loss_history)
+    # Lưu model trạng thái cuối cùng (dù có thể không phải tốt nhất)
+    torch.save(model.state_dict(), 'transformer_last_state.pt')
+    print("--- Hoàn tất ---")
 
 
 if __name__ == "__main__":

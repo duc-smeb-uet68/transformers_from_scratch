@@ -83,51 +83,94 @@ def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, 
 
 
 # --- 2. HÀM DỊCH MỘT CÂU ---
-def translate_sentence(sentence, src_vocab, tgt_vocab, model, device, max_len=100, use_beam=True):
+# def translate_sentence(sentence, src_vocab, tgt_vocab, model, device, max_len=100, use_beam=True):
+#     model.eval()
+#
+#     # 1. Xử lý câu nguồn (Pre-processing)
+#     # Tokenize và chuyển thành ID (BPE Tokenizer đã xử lý tốt việc tách từ)
+#     # Lưu ý: Thêm <sos> và <eos> thủ công nếu tokenizer chưa thêm
+#     input_ids = src_vocab.numericalize(sentence)
+#     tokens = [src_vocab.sos_idx] + input_ids + [src_vocab.eos_idx]
+#
+#     src_tensor = torch.LongTensor(tokens).unsqueeze(0).to(device)
+#     src_mask = model.make_src_mask(src_tensor)
+#
+#     if use_beam:
+#         # Cách 1: Beam Search (Chất lượng cao hơn)
+#         tgt_indices = beam_search_decode(
+#             model, src_tensor, src_mask, max_len,
+#             start_symbol=tgt_vocab.sos_idx,
+#             end_symbol=tgt_vocab.eos_idx,
+#             device=device,
+#             beam_width=5  # Beam width càng lớn càng chính xác nhưng chậm hơn
+#         )
+#     else:
+#         # Cách 2: Greedy Search (Nhanh hơn, dùng để debug)
+#         tgt_indices = [tgt_vocab.sos_idx]
+#         for i in range(max_len):
+#             tgt_tensor = torch.LongTensor(tgt_indices).unsqueeze(0).to(device)
+#             tgt_mask = model.make_tgt_mask(tgt_tensor)
+#
+#             with torch.no_grad():
+#                 tgt_emb = model.positional_encoding(model.tgt_embedding(tgt_tensor))
+#                 enc_src = model.encoder(model.positional_encoding(model.src_embedding(src_tensor)), src_mask)
+#                 output = model.decoder(tgt_emb, enc_src, tgt_mask, src_mask)
+#                 pred_token = output[:, -1, :].argmax(1).item()
+#
+#                 tgt_indices.append(pred_token)
+#                 if pred_token == tgt_vocab.eos_idx:
+#                     break
+#
+#     # 2. Chuyển ID về lại text (Post-processing)
+#     # Loại bỏ token <sos>, <eos> nếu có trong kết quả
+#     result_ids = [t for t in tgt_indices if t not in [tgt_vocab.sos_idx, tgt_vocab.eos_idx, tgt_vocab.pad_idx]]
+#
+#     translation = tgt_vocab.decode(result_ids)
+#     return translation
+
+def translate_sentence(sentence, src_vocab, tgt_vocab, model, device, max_len=100, use_beam=False):
     model.eval()
 
-    # 1. Xử lý câu nguồn (Pre-processing)
-    # Tokenize và chuyển thành ID (BPE Tokenizer đã xử lý tốt việc tách từ)
-    # Lưu ý: Thêm <sos> và <eos> thủ công nếu tokenizer chưa thêm
+    # --- DEBUG: Kiểm tra Tokenizer ---
+    print(f"\n[DEBUG] Input Text: {sentence}")
     input_ids = src_vocab.numericalize(sentence)
     tokens = [src_vocab.sos_idx] + input_ids + [src_vocab.eos_idx]
+
+    # In ra danh sách ID để xem có bị toàn số 3 (<unk>) không
+    print(f"[DEBUG] Token IDs: {tokens}")
+
+    print(f"[DEBUG] Re-decoded Text: {src_vocab.decode(input_ids)}")
+
+    # Kiểm tra xem có bao nhiêu token là <unk> (ID = 3)
+    unk_count = tokens.count(src_vocab.unk_idx)
+    if unk_count > len(tokens) / 3:
+        print("⚠️ CẢNH BÁO: Quá nhiều token <unk>! Có thể do lỗi Font/Encoding hoặc sai chính tả.")
+    # ----------------------------------
 
     src_tensor = torch.LongTensor(tokens).unsqueeze(0).to(device)
     src_mask = model.make_src_mask(src_tensor)
 
     if use_beam:
-        # Cách 1: Beam Search (Chất lượng cao hơn)
         tgt_indices = beam_search_decode(
             model, src_tensor, src_mask, max_len,
-            start_symbol=tgt_vocab.sos_idx,
-            end_symbol=tgt_vocab.eos_idx,
-            device=device,
-            beam_width=5  # Beam width càng lớn càng chính xác nhưng chậm hơn
+            tgt_vocab.sos_idx, tgt_vocab.eos_idx, device, beam_width=5
         )
     else:
-        # Cách 2: Greedy Search (Nhanh hơn, dùng để debug)
+        # Greedy fallback
         tgt_indices = [tgt_vocab.sos_idx]
-        for i in range(max_len):
+        for _ in range(max_len):
             tgt_tensor = torch.LongTensor(tgt_indices).unsqueeze(0).to(device)
             tgt_mask = model.make_tgt_mask(tgt_tensor)
-
             with torch.no_grad():
                 tgt_emb = model.positional_encoding(model.tgt_embedding(tgt_tensor))
                 enc_src = model.encoder(model.positional_encoding(model.src_embedding(src_tensor)), src_mask)
                 output = model.decoder(tgt_emb, enc_src, tgt_mask, src_mask)
                 pred_token = output[:, -1, :].argmax(1).item()
-
                 tgt_indices.append(pred_token)
-                if pred_token == tgt_vocab.eos_idx:
-                    break
+                if pred_token == tgt_vocab.eos_idx: break
 
-    # 2. Chuyển ID về lại text (Post-processing)
-    # Loại bỏ token <sos>, <eos> nếu có trong kết quả
     result_ids = [t for t in tgt_indices if t not in [tgt_vocab.sos_idx, tgt_vocab.eos_idx, tgt_vocab.pad_idx]]
-
-    translation = tgt_vocab.decode(result_ids)
-    return translation
-
+    return tgt_vocab.decode(result_ids)
 
 # --- 3. HÀM TÍNH ĐIỂM BLEU ---
 def calculate_bleu_score(data_iterator, src_vocab, tgt_vocab, model, device, max_len=100):
@@ -308,11 +351,10 @@ def blue_score():
     )
 
     # Tạo DataLoader (Đây chính là data_iterator)
-    # batch_size=32 để dịch cùng lúc 32 câu cho nhanh
     collate_fn = Collate(pad_idx=vocab_src.pad_idx)
     test_iterator = DataLoader(
         test_dataset,
-        batch_size=32,
+        batch_size=16,
         shuffle=False,
         collate_fn=collate_fn
     )
@@ -335,5 +377,4 @@ def blue_score():
 
 if __name__ == "__main__":
     load_model_and_translate()
-    blue_score()
-
+    # blue_score()
