@@ -78,7 +78,8 @@ def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, 
             candidates,
             # x[0] là score, x[1] là list token (sequence)
             # Ta lấy score chia cho (độ dài sequence ^ alpha)
-            key=lambda x: x[0] / (len(x[1]) ** alpha),
+            # key=lambda x: x[0] / (len(x[1]) ** alpha),
+            key=lambda x: x[0],
             reverse=True
         )
 
@@ -166,7 +167,7 @@ def calculate_bleu_score(data_iterator, src_vocab, tgt_vocab, model, device, max
                     # Lưu ý: output là list token IDs
                     pred_token_ids = beam_search_decode(
                         model, src_tensor, src_mask, max_len,
-                        tgt_vocab.sos_idx, tgt_vocab.eos_idx, device
+                        tgt_vocab.sos_idx, tgt_vocab.eos_idx, device, beam_width = 10
                     )
                     # Decode ra text (Bỏ special tokens)
                     pred_text = tgt_vocab.decode(pred_token_ids)
@@ -261,7 +262,7 @@ def load_model_and_translate():
                 model,
                 device,
                 max_len= 200,
-                use_beam=True  # Bật Beam Search
+                use_beam=False  # Bật Beam Search
             )
 
             end = time.time()
@@ -282,8 +283,8 @@ def blue_score():
     # 2. Load Vocabulary (BPE)
     # Đảm bảo đường dẫn trỏ đúng file json bạn đã train
     try:
-        vocab_src = Vocabulary("data/shared_vocab/tokenizer_shared.json")
-        vocab_tgt = Vocabulary("data/shared_vocab/tokenizer_shared.json")
+        vocab_src = Vocabulary("data/vocab_bpe/tokenizer_vi.json")
+        vocab_tgt = Vocabulary("data/vocab_bpe/tokenizer_en.json")
     except Exception as e:
         print(f"Lỗi load vocab: {e}")
         exit()
@@ -304,9 +305,9 @@ def blue_score():
     ).to(device)
 
     # Load trọng số đã train
-    if os.path.exists('transformer_last_state.pt'):
-        model.load_state_dict(torch.load('transformer_last_state.pt', map_location=device))
-        print("--> Đã load trọng số 'transformer_last_state.pt'")
+    if os.path.exists('transformer_best.pt'):
+        model.load_state_dict(torch.load('transformer_best.pt', map_location=device))
+        print("--> Đã load trọng số 'transformer_best.pt'")
     else:
         print("CẢNH BÁO: Không tìm thấy file trọng số! Kết quả BLEU sẽ rất thấp.")
 
