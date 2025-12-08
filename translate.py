@@ -72,7 +72,15 @@ def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, 
 
         # Sắp xếp các ứng viên theo score giảm dần
         # (Có thể cải tiến bằng cách chia score cho độ dài câu để normalize)
-        ordered = sorted(candidates, key=lambda x: x[0], reverse=True)
+        alpha = 0.7
+
+        ordered = sorted(
+            candidates,
+            # x[0] là score, x[1] là list token (sequence)
+            # Ta lấy score chia cho (độ dài sequence ^ alpha)
+            key=lambda x: x[0] / (len(x[1]) ** alpha),
+            reverse=True
+        )
 
         # Giữ lại top k nhánh tốt nhất cho vòng lặp sau
         k_beams = ordered[:beam_width]
@@ -82,53 +90,8 @@ def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, 
     return best_seq
 
 
-# --- 2. HÀM DỊCH MỘT CÂU ---
-# def translate_sentence(sentence, src_vocab, tgt_vocab, model, device, max_len=100, use_beam=True):
-#     model.eval()
-#
-#     # 1. Xử lý câu nguồn (Pre-processing)
-#     # Tokenize và chuyển thành ID (BPE Tokenizer đã xử lý tốt việc tách từ)
-#     # Lưu ý: Thêm <sos> và <eos> thủ công nếu tokenizer chưa thêm
-#     input_ids = src_vocab.numericalize(sentence)
-#     tokens = [src_vocab.sos_idx] + input_ids + [src_vocab.eos_idx]
-#
-#     src_tensor = torch.LongTensor(tokens).unsqueeze(0).to(device)
-#     src_mask = model.make_src_mask(src_tensor)
-#
-#     if use_beam:
-#         # Cách 1: Beam Search (Chất lượng cao hơn)
-#         tgt_indices = beam_search_decode(
-#             model, src_tensor, src_mask, max_len,
-#             start_symbol=tgt_vocab.sos_idx,
-#             end_symbol=tgt_vocab.eos_idx,
-#             device=device,
-#             beam_width=5  # Beam width càng lớn càng chính xác nhưng chậm hơn
-#         )
-#     else:
-#         # Cách 2: Greedy Search (Nhanh hơn, dùng để debug)
-#         tgt_indices = [tgt_vocab.sos_idx]
-#         for i in range(max_len):
-#             tgt_tensor = torch.LongTensor(tgt_indices).unsqueeze(0).to(device)
-#             tgt_mask = model.make_tgt_mask(tgt_tensor)
-#
-#             with torch.no_grad():
-#                 tgt_emb = model.positional_encoding(model.tgt_embedding(tgt_tensor))
-#                 enc_src = model.encoder(model.positional_encoding(model.src_embedding(src_tensor)), src_mask)
-#                 output = model.decoder(tgt_emb, enc_src, tgt_mask, src_mask)
-#                 pred_token = output[:, -1, :].argmax(1).item()
-#
-#                 tgt_indices.append(pred_token)
-#                 if pred_token == tgt_vocab.eos_idx:
-#                     break
-#
-#     # 2. Chuyển ID về lại text (Post-processing)
-#     # Loại bỏ token <sos>, <eos> nếu có trong kết quả
-#     result_ids = [t for t in tgt_indices if t not in [tgt_vocab.sos_idx, tgt_vocab.eos_idx, tgt_vocab.pad_idx]]
-#
-#     translation = tgt_vocab.decode(result_ids)
-#     return translation
 
-def translate_sentence(sentence, src_vocab, tgt_vocab, model, device, max_len=100, use_beam=False):
+def translate_sentence(sentence, src_vocab, tgt_vocab, model, device, max_len=100, use_beam=True):
     model.eval()
 
     # --- DEBUG: Kiểm tra Tokenizer ---
@@ -153,7 +116,7 @@ def translate_sentence(sentence, src_vocab, tgt_vocab, model, device, max_len=10
     if use_beam:
         tgt_indices = beam_search_decode(
             model, src_tensor, src_mask, max_len,
-            tgt_vocab.sos_idx, tgt_vocab.eos_idx, device, beam_width=5
+            tgt_vocab.sos_idx, tgt_vocab.eos_idx, device, beam_width=10
         )
     else:
         # Greedy fallback
@@ -174,40 +137,60 @@ def translate_sentence(sentence, src_vocab, tgt_vocab, model, device, max_len=10
 
 # --- 3. HÀM TÍNH ĐIỂM BLEU ---
 def calculate_bleu_score(data_iterator, src_vocab, tgt_vocab, model, device, max_len=100):
-    """
-    Tính điểm BLEU trên toàn bộ tập dữ liệu (Validation/Test)
-    """
     model.eval()
-    targets = []
-    outputs = []
 
-    print("--- Đang tính toán BLEU Score ---")
+    # List chứa toàn bộ câu dự đoán (hypotheses)
+    hypotheses = []
+    # List chứa toàn bộ câu tham chiếu (references)
+    references = []
+
+    print("--- Đang tính toán BLEU Score (có thể lâu do dùng Beam Search từng câu) ---")
+
     with torch.no_grad():
-        for src, tgt in tqdm(data_iterator, desc="Translating"):
-            # Lấy batch size
-            batch_size = src.shape[0]
+        for src, tgt in tqdm(data_iterator, desc="Evaluating"):
+            # src: [batch_size, src_len]
+            # tgt: [batch_size, tgt_len]
 
-            for i in range(batch_size):
-                # Lấy từng câu trong batch ra để dịch
-                # Lưu ý: Đây là cách đơn giản, để nhanh hơn có thể implement Batch Beam Search
+            # Lặp qua từng câu trong batch (Vẫn chậm, nhưng an toàn với logic Beam Search hiện tại)
+            for i in range(src.size(0)):
 
-                # Lấy ID của câu nguồn (bỏ padding)
-                src_ids = [token.item() for token in src[i] if token.item() != src_vocab.pad_idx]
-                # Bỏ <sos> và <eos> nếu có để decode lại thành string cho chuẩn
-                src_text = src_vocab.decode(src_ids)
+                # 1. Lấy Source Tensor (bỏ padding)
+                # Cần unsqueeze(0) để tạo lại chiều batch = 1 cho model
+                src_tensor = src[i].unsqueeze(0).to(device)  # [1, seq_len]
 
-                # Lấy ID của câu đích thực tế (Reference)
-                tgt_ids = [token.item() for token in tgt[i] if token.item() != tgt_vocab.pad_idx]
-                tgt_text = tgt_vocab.decode(tgt_ids)  # Hàm decode của BPE sẽ tự bỏ special tokens
+                # Tạo mask
+                src_mask = model.make_src_mask(src_tensor)
 
-                # Dịch
-                pred_text = translate_sentence(src_text, src_vocab, tgt_vocab, model, device, max_len, use_beam=True)
+                try:
+                    # Gọi Beam Search decode
+                    # Lưu ý: output là list token IDs
+                    pred_token_ids = beam_search_decode(
+                        model, src_tensor, src_mask, max_len,
+                        tgt_vocab.sos_idx, tgt_vocab.eos_idx, device
+                    )
+                    # Decode ra text (Bỏ special tokens)
+                    pred_text = tgt_vocab.decode(pred_token_ids)
+                    hypotheses.append(pred_text)
 
-                outputs.append(pred_text)
-                targets.append([tgt_text])  # Sacrebleu yêu cầu list of references
+                except Exception as e:
+                    print(f"Lỗi dịch câu {i}: {e}")
+                    hypotheses.append("")
 
-    # Tính BLEU
-    bleu = sacrebleu.corpus_bleu(outputs, targets)
+                # 3. Xử lý Reference (Target thực tế)
+                # Lấy ID, bỏ padding
+                tgt_ids = [t.item() for t in tgt[i] if
+                           t.item() not in [tgt_vocab.pad_idx, tgt_vocab.sos_idx, tgt_vocab.eos_idx]]
+                tgt_text = tgt_vocab.decode(tgt_ids)
+                references.append(tgt_text)
+
+    # --- SỬA LỖI FORMAT SACREBLEU ---
+    # SacreBLEU cần references là list of list: [[ref1_cau1, ref1_cau2...], [ref2_cau1...]]
+    # Vì chỉ có 1 reference mỗi câu, ta bọc list references vào 1 list nữa.
+
+    print(f"Sample Prediction: {hypotheses[0]}")
+    print(f"Sample Reference : {references[0]}")
+
+    bleu = sacrebleu.corpus_bleu(hypotheses, [references])  # CHÚ Ý DẤU NGOẶC VUÔNG
     return bleu.score
 
 
@@ -219,8 +202,8 @@ def load_model_and_translate():
 
     # 1. Load Vocabulary (BPE)
     # Đảm bảo đường dẫn khớp với file đã train ở bước build_vocab_bpe.py
-    vocab_src_path = "data/vocab_bpe/tokenizer_vi.json"
-    vocab_tgt_path = "data/vocab_bpe/tokenizer_en.json"
+    vocab_src_path = "data/shared_vocab/tokenizer_shared.json"
+    vocab_tgt_path = "data/shared_vocab/tokenizer_shared.json"
 
     if not os.path.exists(vocab_src_path) or not os.path.exists(vocab_tgt_path):
         print(f"Lỗi: Không tìm thấy file vocab tại {vocab_src_path}. Hãy chạy build_vocab_bpe.py trước.")
@@ -246,7 +229,7 @@ def load_model_and_translate():
     ).to(device)
 
     # 3. Load Trọng số (Weights)
-    model_path = 'transformer_best.pt'  # Ưu tiên load model tốt nhất
+    model_path = 'transformer_last_state.pt'  # Ưu tiên load model tốt nhất
     if not os.path.exists(model_path):
         model_path = 'transformer_last.pt'
 
@@ -277,6 +260,7 @@ def load_model_and_translate():
                 vocab_tgt,
                 model,
                 device,
+                max_len= 200,
                 use_beam=True  # Bật Beam Search
             )
 
@@ -298,8 +282,8 @@ def blue_score():
     # 2. Load Vocabulary (BPE)
     # Đảm bảo đường dẫn trỏ đúng file json bạn đã train
     try:
-        vocab_src = Vocabulary("data/vocab_bpe/tokenizer_vi.json")
-        vocab_tgt = Vocabulary("data/vocab_bpe/tokenizer_en.json")
+        vocab_src = Vocabulary("data/shared_vocab/tokenizer_shared.json")
+        vocab_tgt = Vocabulary("data/shared_vocab/tokenizer_shared.json")
     except Exception as e:
         print(f"Lỗi load vocab: {e}")
         exit()
@@ -320,9 +304,9 @@ def blue_score():
     ).to(device)
 
     # Load trọng số đã train
-    if os.path.exists('transformer_best.pt'):
-        model.load_state_dict(torch.load('transformer_best.pt', map_location=device))
-        print("--> Đã load trọng số 'transformer_best.pt'")
+    if os.path.exists('transformer_last_state.pt'):
+        model.load_state_dict(torch.load('transformer_last_state.pt', map_location=device))
+        print("--> Đã load trọng số 'transformer_last_state.pt'")
     else:
         print("CẢNH BÁO: Không tìm thấy file trọng số! Kết quả BLEU sẽ rất thấp.")
 
@@ -367,7 +351,7 @@ def blue_score():
         tgt_vocab=vocab_tgt,
         model=model,
         device=device,
-        max_len=100
+        max_len=200
     )
 
     print(f"\n============================")
@@ -376,5 +360,5 @@ def blue_score():
 
 
 if __name__ == "__main__":
-    load_model_and_translate()
-    # blue_score()
+    # load_model_and_translate()
+    blue_score()

@@ -43,7 +43,7 @@ if __name__ == "__main__":
     print("--- Đang tải dataset ---")
     # Giả sử bạn đã chạy save_to_disk ở bước trước
     try:
-        dataset = load_from_disk("data/iwslt2015_data")
+        dataset = load_from_disk("../data/iwslt2015_data")
         train_data = dataset['train']
     except:
         from datasets import load_dataset
@@ -54,13 +54,13 @@ if __name__ == "__main__":
     # Train Tokenizer tiếng Việt
     train_tokenizer(
         get_training_corpus(train_data, 'vi'),
-        'data/vocab_bpe/tokenizer_vi.json',
+        '../data/vocab_bpe/tokenizer_vi.json',
         vocab_size=8000  # Tiếng Việt
     )
 
     # Train Tokenizer tiếng Anh
     train_tokenizer(
         get_training_corpus(train_data, 'en'),
-        'data/vocab_bpe/tokenizer_en.json',
+        '../data/vocab_bpe/tokenizer_en.json',
         vocab_size=8000  # Tiếng Anh
     )

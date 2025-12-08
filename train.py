@@ -29,7 +29,7 @@ class EarlyStopping:
         self.counter = 0
         self.best_score = None
         self.early_stop = False
-        self.val_loss_min = np.Inf
+        self.val_loss_min = np.inf
 
     def __call__(self, val_loss, model):
         score = -val_loss
@@ -129,7 +129,6 @@ def train_epoch(model, iterator, optimizer, scheduler, criterion, clip, device, 
     return epoch_loss / len(iterator)
 
 
-# --- 4. HÀM ĐÁNH GIÁ (GIỮ NGUYÊN) ---
 def evaluate(model, iterator, criterion, device):
     model.eval()
     epoch_loss = 0
@@ -218,8 +217,8 @@ def run_training():
     # --- Load Data ---
     print("--- Loading Data... ---")
     try:
-        vocab_src = Vocabulary("data/vocab_bpe/tokenizer_vi.json")
-        vocab_tgt = Vocabulary("data/vocab_bpe/tokenizer_en.json")
+        vocab_src = Vocabulary("data/shared_vocab/tokenizer_shared.json")
+        vocab_tgt = Vocabulary("data/shared_vocab/tokenizer_shared.json")
         dataset = load_from_disk("data/iwslt2015_data")
     except Exception as e:
         print(f"Error loading data: {e}")
@@ -250,6 +249,10 @@ def run_training():
         dropout=DROPOUT, max_len=5000,
         src_pad_idx=vocab_src.pad_idx, tgt_pad_idx=vocab_tgt.pad_idx
     ).to(device)
+
+    #share weights giữa encoder decoder và outputLayer
+    model.src_embedding.emb.weight = model.tgt_embedding.emb.weight
+    model.fc_out.weight = model.src_embedding.emb.weight
 
     print(f'Mô hình có {sum(p.numel() for p in model.parameters() if p.requires_grad):,} tham số')
 
