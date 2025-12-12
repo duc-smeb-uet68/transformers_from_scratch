@@ -13,10 +13,6 @@ SOS_IDX = 1
 EOS_IDX = 2
 UNK_IDX = 3
 
-from torch.utils.data import Dataset
-import torch
-
-
 class BilingualDataset(Dataset):
     def __init__(self, src_sentences, tgt_sentences, src_vocab, tgt_vocab, max_len=256):
         self.src_sentences = src_sentences
@@ -56,7 +52,6 @@ class BilingualDataset(Dataset):
         tgt_out = [self.tgt_vocab.stoi["<sos>"]] + tgt_indices + [self.tgt_vocab.stoi["<eos>"]]
 
         return torch.tensor(src_out), torch.tensor(tgt_out)
-
 
 class Collate:
     def __init__(self, pad_idx):

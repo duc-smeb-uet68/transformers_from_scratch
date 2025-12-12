@@ -3,8 +3,8 @@ class Config:
         # Thiết lập dữ liệu [cite: 4, 5]
         self.src_lang = 'vi'
         self.tgt_lang = 'en'
-        self.max_len = 100         # Độ dài tối đa của câu (để cắt/pad)
-        self.batch_size = 32
+        self.max_len = 128         # Độ dài tối đa của câu (để cắt/pad)
+        self.batch_size = 16
 
         # Thiết lập Mô hình (Model Architecture) [cite: 10]
         self.d_model = 512        # Kích thước vector embedding
@@ -15,9 +15,13 @@ class Config:
 
         # Thiết lập Huấn luyện (Training) [cite: 27, 29]
         self.lr = 0.0001          # Learning rate
-        self.epochs = 20
+        #self.epochs = 20
         self.warmup_steps = 4000  # Cho Scheduler
         self.label_smoothing = 0.1 # Kỹ thuật giúp model đỡ overfit
+
+        self.n_epochs = 50          # Đặt cao lên, Early Stopping sẽ tự dừng
+        self.clip = 1.0             # Gradient Clipping
+        self.patience = 5           # Dừng nếu Val Loss không giảm sau 5 epoch
 
         # Đường dẫn lưu model
         self.model_path = 'weights/transformer_vi_en.pth'

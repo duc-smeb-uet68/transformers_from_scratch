@@ -15,7 +15,7 @@ from tqdm import tqdm
 from model.transformer import Transformer
 from utils.dataset import BilingualDataset, Collate
 from utils.tokenizer import Vocabulary
-
+from configs import cfg
 
 # --- 1. CLASS EARLY STOPPING (MỚI - QUAN TRỌNG) ---
 class EarlyStopping:
@@ -202,17 +202,17 @@ def run_training():
     print(f"Device: {device}")
 
     # --- Hyperparameters Tối Ưu ---
-    BATCH_SIZE = 32
-    N_EPOCHS = 50  # Đặt cao lên, Early Stopping sẽ tự dừng
-    CLIP = 1.0  # Gradient Clipping
-    PATIENCE = 5  # Dừng nếu Val Loss không giảm sau 5 epoch
+    BATCH_SIZE = cfg.batch_size
+    N_EPOCHS = cfg.n_epochs
+    CLIP = cfg.clip
+    PATIENCE = cfg.patience
 
-    D_MODEL = 512
-    N_LAYERS = 6
-    N_HEADS = 8
-    D_FF = 2048
-    DROPOUT = 0.1
-    MAX_LEN = 128
+    D_MODEL = cfg.d_model
+    N_LAYERS = cfg.n_layers
+    N_HEADS = cfg.n_heads
+    D_FF = cfg.d_ff
+    DROPOUT = cfg.dropout
+    MAX_LEN = cfg.max_len
 
     # --- Load Data ---
     print("--- Loading Data... ---")
@@ -249,6 +249,14 @@ def run_training():
         dropout=DROPOUT, max_len=5000,
         src_pad_idx=vocab_src.pad_idx, tgt_pad_idx=vocab_tgt.pad_idx
     ).to(device)
+
+    # --- Load checkpoint nếu tồn tại ---
+    if os.path.exists("transformer_best.pt"):
+        print(">>> Loading saved model: transformer_best.pt")
+        model.load_state_dict(torch.load("transformer_best.pt", map_location=device))
+    else:
+        print(">>> No saved model found, training from scratch.")
+
 
     #share weights giữa encoder decoder và outputLayer
     model.src_embedding.emb.weight = model.tgt_embedding.emb.weight
