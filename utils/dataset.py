@@ -31,8 +31,9 @@ class BilingualDataset(Dataset):
 
         # 1. Chuyển từ -> số (Numericalize)
         # Lưu ý: Ta lấy list số trước, chưa thêm SOS/EOS vội
-        src_indices = self.src_vocab.numericalize(src_text, lang='vi')
-        tgt_indices = self.tgt_vocab.numericalize(tgt_text, lang='en')
+        src_indices = self.src_vocab.numericalize(src_text)
+        tgt_indices = self.tgt_vocab.numericalize(tgt_text)
+
 
         # 2. LOGIC CẮT CÂU (TRUNCATION) - QUAN TRỌNG
         # Ta cần chừa lại 2 vị trí cho <sos> và <eos>
@@ -54,17 +55,22 @@ class BilingualDataset(Dataset):
         return torch.tensor(src_out), torch.tensor(tgt_out)
 
 class Collate:
-    def __init__(self, pad_idx):
-        self.pad_idx = pad_idx
+    def __init__(self, src_pad_idx, tgt_pad_idx):
+        self.src_pad_idx = src_pad_idx
+        self.tgt_pad_idx = tgt_pad_idx
 
     def __call__(self, batch):
-        src_batch, tgt_batch = [], []
-        for src_item, tgt_item in batch:
-            src_batch.append(src_item)
-            tgt_batch.append(tgt_item)
+        src_batch, tgt_batch = zip(*batch)
 
-        # Padding
-        src_batch = pad_sequence(src_batch, padding_value=self.pad_idx, batch_first=True)
-        tgt_batch = pad_sequence(tgt_batch, padding_value=self.pad_idx, batch_first=True)
+        src_batch = pad_sequence(
+            src_batch,
+            batch_first=True,
+            padding_value=self.src_pad_idx
+        )
+        tgt_batch = pad_sequence(
+            tgt_batch,
+            batch_first=True,
+            padding_value=self.tgt_pad_idx
+        )
 
         return src_batch, tgt_batch

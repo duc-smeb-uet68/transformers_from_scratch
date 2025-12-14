@@ -4,7 +4,7 @@ class Config:
         self.src_lang = 'vi'
         self.tgt_lang = 'en'
         self.max_len = 128         # Độ dài tối đa của câu (để cắt/pad)
-        self.batch_size = 16
+        self.batch_size = 32
 
         # Thiết lập Mô hình (Model Architecture) [cite: 10]
         self.d_model = 512        # Kích thước vector embedding

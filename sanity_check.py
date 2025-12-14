@@ -10,8 +10,7 @@ import time
 # Đảm bảo bạn đặt file này cùng cấp với thư mục model/ và utils/
 from model.transformer import Transformer
 from utils.dataset import BilingualDataset, Collate
-from utils.tokenizer import Vocabulary
-
+from utils.word_vocab import Vocabulary
 
 def run_sanity_check():
     # 1. Cấu hình & Thiết bị
@@ -19,22 +18,31 @@ def run_sanity_check():
     print(f"--- SANITY CHECK STARTING ON {device} ---")
 
     # Hyperparameters (Giữ nguyên như train.py để test đúng kiến trúc)
-    D_MODEL = 512
-    N_LAYERS = 6
-    N_HEADS = 8
-    D_FF = 2048
-    DROPOUT = 0.1  # Có thể giảm về 0.0 để test overfit nhanh hơn, nhưng để 0.1 cũng được
+    # D_MODEL = 512
+    # N_LAYERS = 6
+    # N_HEADS = 8
+    # D_FF = 2048
+    # DROPOUT = 0.0  # Có thể giảm về 0.0 để test overfit nhanh hơn, nhưng để 0.1 cũng được
+    # MAX_LEN = 100
+    # BATCH_SIZE = 2  # Batch nhỏ vì chỉ có 20 câu
+    # LEARNING_RATE = 0.005  # LR hơi cao một chút để hội tụ nhanh
+    D_MODEL = 128
+    N_LAYERS = 2
+    N_HEADS = 4
+    D_FF = 512
+    DROPOUT = 0.0
     MAX_LEN = 100
-    BATCH_SIZE = 10  # Batch nhỏ vì chỉ có 20 câu
-    LEARNING_RATE = 0.0005  # LR hơi cao một chút để hội tụ nhanh
-    N_EPOCHS = 100  # Chạy nhiều epoch để ép loss về 0
+    BATCH_SIZE = 20
+    LEARNING_RATE = 1e-3
+
+    N_EPOCHS = 300  # Chạy nhiều epoch để ép loss về 0
 
     # 2. Load Dữ Liệu & Vocab
     print("Loading Data & Vocab...")
     try:
         # Đường dẫn vocab (Hãy sửa lại nếu khác máy bạn)
-        vocab_src = Vocabulary("data/shared_vocab/tokenizer_shared.json")
-        vocab_tgt = Vocabulary("data/shared_vocab/tokenizer_shared.json")
+        vocab_src = Vocabulary.load_vocab("data/vocab0/vocab_src.json")
+        vocab_tgt = Vocabulary.load_vocab("data/vocab0/vocab_tgt.json")
 
         # Load dataset
         dataset = load_from_disk("data/iwslt2015_data")
@@ -43,6 +51,10 @@ def run_sanity_check():
         subset_size = 20
         raw_src = [item['vi'] for item in dataset['train']][:subset_size]
         raw_tgt = [item['en'] for item in dataset['train']][:subset_size]
+
+        # --- SANITY CHECK CỨNG: lặp lại 1 câu ---
+        raw_src = [raw_src[1]] * 20
+        raw_tgt = [raw_tgt[1]] * 20
 
         print(f"--> Đã lấy {len(raw_src)} cặp câu mẫu để test.")
         print(f"--> Ví dụ: {raw_src[0]}  ==>  {raw_tgt[0]}")
@@ -53,7 +65,11 @@ def run_sanity_check():
 
     # Tạo Dataset & DataLoader
     sanity_dataset = BilingualDataset(raw_src, raw_tgt, vocab_src, vocab_tgt, max_len=MAX_LEN)
-    collate = Collate(pad_idx=vocab_src.pad_idx)
+    collate = Collate(
+        src_pad_idx=vocab_src.pad_idx,
+        tgt_pad_idx=vocab_tgt.pad_idx
+    )
+
     # Shuffle=True hay False không quan trọng vì data quá ít, nhưng False dễ debug hơn
     sanity_iterator = DataLoader(sanity_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate)
 
@@ -66,9 +82,9 @@ def run_sanity_check():
         src_pad_idx=vocab_src.pad_idx, tgt_pad_idx=vocab_tgt.pad_idx
     ).to(device)
 
-    # Weight Tying (Giống train.py)
-    model.src_embedding.emb.weight = model.tgt_embedding.emb.weight
-    model.fc_out.weight = model.src_embedding.emb.weight
+    # # Weight Tying (Giống train.py)
+    # model.src_embedding.emb.weight = model.tgt_embedding.emb.weight
+    # model.fc_out.weight = model.src_embedding.emb.weight
 
     # 4. Optimizer & Loss
     # Dùng Adam thường thay vì AdamW cho đơn giản, set LR cố định
@@ -124,33 +140,41 @@ def run_sanity_check():
     print("--- HOÀN TẤT SANITY CHECK ---")
 
 
-def test_sanity_translation(model, src_text, vocab_src, vocab_tgt, device):
-    """Test dịch lại chính câu vừa học xem có đúng y hệt không"""
+def test_sanity_translation(model, src_sentence, vocab_src, vocab_tgt, device, max_len=50):
     model.eval()
-    src_ids = [vocab_src.sos_idx] + vocab_src.numericalize(src_text) + [vocab_src.eos_idx]
-    src_tensor = torch.LongTensor(src_ids).unsqueeze(0).to(device)
-    src_mask = model.make_src_mask(src_tensor)
 
-    # Greedy Decode đơn giản
-    tgt_indices = [vocab_tgt.sos_idx]
-    for _ in range(50):
-        tgt_tensor = torch.LongTensor(tgt_indices).unsqueeze(0).to(device)
-        tgt_mask = model.make_tgt_mask(tgt_tensor)
+    # ===== Encode source =====
+    src_ids = vocab_src.numericalize(src_sentence)
+    src_ids = [vocab_src.sos_idx] + src_ids + [vocab_src.eos_idx]
+    src_tensor = torch.tensor(src_ids).unsqueeze(0).to(device)
+
+    # ===== Decode =====
+    generated = [vocab_tgt.sos_idx]
+
+    for _ in range(max_len):
+        tgt_tensor = torch.tensor(generated).unsqueeze(0).to(device)
 
         with torch.no_grad():
-            tgt_emb = model.positional_encoding(model.tgt_embedding(tgt_tensor))
-            enc_src = model.encoder(model.positional_encoding(model.src_embedding(src_tensor)), src_mask)
-            output = model.decoder(tgt_emb, enc_src, tgt_mask, src_mask)
-            pred_token = output[:, -1, :].argmax(1).item()
+            output = model(src_tensor, tgt_tensor)
 
-            if pred_token == vocab_tgt.eos_idx:
-                break
-            tgt_indices.append(pred_token)
+        next_token = output[:, -1, :].argmax(dim=-1).item()
 
-    pred_text = vocab_tgt.decode(tgt_indices[1:])  # Bỏ <sos>
-    print(f"Input:  {src_text}")
-    print(f"Output: {pred_text}")
+        # 🔒 Bảo vệ: token vượt vocab
+        if next_token >= len(vocab_tgt):
+            print("⚠️ Token vượt vocab, dừng decode.")
+            break
+
+        generated.append(next_token)
+
+        if next_token == vocab_tgt.eos_idx:
+            break
+
+    # ===== Decode to text =====
+    pred_sentence = vocab_tgt.decode(generated[1:])
+    print("🔍 Output:", pred_sentence)
 
 
 if __name__ == "__main__":
     run_sanity_check()
+
+    

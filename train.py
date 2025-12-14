@@ -14,7 +14,7 @@ from tqdm import tqdm
 # Import các module từ project của bạn
 from model.transformer import Transformer
 from utils.dataset import BilingualDataset, Collate
-from utils.tokenizer import Vocabulary
+from utils.word_vocab import Vocabulary
 from configs import cfg
 
 # --- 1. CLASS EARLY STOPPING (MỚI - QUAN TRỌNG) ---

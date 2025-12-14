@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 # Import module nội bộ
 from model.transformer import Transformer
-from utils.tokenizer import Vocabulary
+from utils.word_vocab import Vocabulary
 from utils.dataset import BilingualDataset, Collate
 
 # --- 1. THUẬT TOÁN BEAM SEARCH (NÂNG CẤP) ---
@@ -283,8 +283,8 @@ def blue_score():
     # 2. Load Vocabulary (BPE)
     # Đảm bảo đường dẫn trỏ đúng file json bạn đã train
     try:
-        vocab_src = Vocabulary("data/vocab_bpe/tokenizer_vi.json")
-        vocab_tgt = Vocabulary("data/vocab_bpe/tokenizer_en.json")
+        vocab_src = Vocabulary("data/shared_vocab/tokenizer_shared.json")
+        vocab_tgt = Vocabulary("data/shared_vocab/tokenizer_shared.json")
     except Exception as e:
         print(f"Lỗi load vocab: {e}")
         exit()
@@ -361,5 +361,5 @@ def blue_score():
 
 
 if __name__ == "__main__":
-    # load_model_and_translate()
-    blue_score()
+    load_model_and_translate()
+    #blue_score()

@@ -1,5 +1,4 @@
-from utils.dataset import BilingualDataset, Collate
-from utils.tokenizer import Vocabulary
+from utils.word_vocab import Vocabulary
 from datasets import load_dataset
 
 def extract_data(data_split):
@@ -9,7 +8,6 @@ def extract_data(data_split):
 
 
 if __name__ == "__main__":
-
     print("--- Đang tải dataset IWSLT2015 (Vi-En) ---")
     dataset = load_dataset("nguyenvuhuy/iwslt2015-en-vi")
     dataset.save_to_disk("data/iwslt2015_data")
