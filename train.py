@@ -1,27 +1,27 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 import time
 import math
-import matplotlib.pyplot as plt
 import os
-import numpy as np  # Thêm numpy
-from datasets import load_from_disk, load_dataset
+import numpy as np
+import matplotlib.pyplot as plt
+from datasets import load_from_disk
 from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
 
-# Import các module từ project của bạn
+# Project imports
 from model.transformer import Transformer
 from utils.dataset import BilingualDataset, Collate
 from utils.word_vocab import Vocabulary
 from configs import cfg
 
-# --- 1. CLASS EARLY STOPPING (MỚI - QUAN TRỌNG) ---
+# ======================================================
+# 1. Early Stopping
+# ======================================================
 class EarlyStopping:
-    """Dừng train nếu validation loss không cải thiện sau một số epoch nhất định."""
-
-    def __init__(self, patience=5, delta=0, path='transformer_best.pt', verbose=True):
+    def __init__(self, patience=3, delta=0, path='finetune_best.pt', verbose=True):
         self.patience = patience
         self.delta = delta
         self.path = path
@@ -33,14 +33,13 @@ class EarlyStopping:
 
     def __call__(self, val_loss, model):
         score = -val_loss
-
         if self.best_score is None:
             self.best_score = score
             self.save_checkpoint(val_loss, model)
         elif score < self.best_score + self.delta:
             self.counter += 1
             if self.verbose:
-                print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
+                print(f"EarlyStopping counter: {self.counter}/{self.patience}")
             if self.counter >= self.patience:
                 self.early_stop = True
         else:
@@ -49,52 +48,48 @@ class EarlyStopping:
             self.counter = 0
 
     def save_checkpoint(self, val_loss, model):
-        '''Lưu model khi validation loss giảm.'''
         if self.verbose:
-            print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
+            print(f"Val loss improved ({self.val_loss_min:.4f} → {val_loss:.4f}). Saving model.")
         torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
 
 
-# --- 2. CLASS SCHEDULER (GIỮ NGUYÊN) ---
+# ======================================================
+# 2. Scheduler
+# ======================================================
 class TransformerScheduler:
-    def __init__(self, optimizer, d_model, warmup_steps=4000, factor=1.0):
+    def __init__(self, optimizer, d_model, warmup_steps=4000):
         self.optimizer = optimizer
         self.d_model = d_model
         self.warmup_steps = warmup_steps
-        self.factor = factor
-        self.current_step = 0
-        self._rate = 0
+        self.step_num = 0
 
     def step(self):
-        self.current_step += 1
-        rate = self.rate()
+        self.step_num += 1
+        lr = self.rate()
         for p in self.optimizer.param_groups:
-            p['lr'] = rate
-        self._rate = rate
+            p['lr'] = lr
 
-    def rate(self, step=None):
-        if step is None:
-            step = self.current_step
-        if step == 0: step = 1
-        return self.factor * (self.d_model ** (-0.5) *
-                              min(step ** (-0.5), step * self.warmup_steps ** (-1.5)))
+    def rate(self):
+        step = max(self.step_num, 1)
+        return self.d_model ** (-0.5) * min(
+            step ** (-0.5),
+            step * self.warmup_steps ** (-1.5)
+        )
 
     def zero_grad(self):
         self.optimizer.zero_grad()
 
 
-# --- 3. HÀM TRAIN 1 EPOCH (CÓ CHECK NaN) ---
-def train_epoch(model, iterator, optimizer, scheduler, criterion, clip, device, scaler):
+# ======================================================
+# 3. Train / Eval
+# ======================================================
+def train_epoch(model, loader, optimizer, scheduler, criterion, clip, device, scaler):
     model.train()
     epoch_loss = 0
 
-    # Progress bar
-    progress_bar = tqdm(iterator, desc="Training", leave=False)
-
-    for i, (src, tgt) in enumerate(progress_bar):
+    for src, tgt in tqdm(loader, desc="Training", leave=False):
         src, tgt = src.to(device), tgt.to(device)
-
         tgt_input = tgt[:, :-1]
         tgt_output = tgt[:, 1:]
 
@@ -102,16 +97,12 @@ def train_epoch(model, iterator, optimizer, scheduler, criterion, clip, device, 
 
         with autocast():
             output = model(src, tgt_input)
-            output_dim = output.shape[-1]
-            output = output.contiguous().view(-1, output_dim)
-            tgt_output = tgt_output.contiguous().view(-1)
+            output = output.reshape(-1, output.shape[-1])
+            tgt_output = tgt_output.reshape(-1)
             loss = criterion(output, tgt_output)
 
-        # --- SAFETY CHECK: Chặn loss NaN/Inf ---
         if torch.isnan(loss) or torch.isinf(loss):
-            print(f"\n[CẢNH BÁO] Loss bị NaN hoặc Inf tại batch {i}. Bỏ qua bước cập nhật này.")
             continue
-        # ---------------------------------------
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -122,195 +113,148 @@ def train_epoch(model, iterator, optimizer, scheduler, criterion, clip, device, 
 
         epoch_loss += loss.item()
 
-        # Cập nhật hiển thị
-        current_lr = optimizer.param_groups[0]['lr']
-        progress_bar.set_postfix(loss=loss.item(), lr=f"{current_lr:.2e}")
-
-    return epoch_loss / len(iterator)
+    return epoch_loss / len(loader)
 
 
-def evaluate(model, iterator, criterion, device):
+def evaluate(model, loader, criterion, device):
     model.eval()
-    epoch_loss = 0
+    loss = 0
     with torch.no_grad():
-        for i, (src, tgt) in enumerate(iterator):
-            src = src.to(device)
-            tgt = tgt.to(device)
+        for src, tgt in loader:
+            src, tgt = src.to(device), tgt.to(device)
             tgt_input = tgt[:, :-1]
             tgt_output = tgt[:, 1:]
             output = model(src, tgt_input)
-            output_dim = output.shape[-1]
-            output = output.contiguous().view(-1, output_dim)
-            tgt_output = tgt_output.contiguous().view(-1)
-            loss = criterion(output, tgt_output)
-            epoch_loss += loss.item()
-    return epoch_loss / len(iterator)
+            output = output.reshape(-1, output.shape[-1])
+            tgt_output = tgt_output.reshape(-1)
+            loss += criterion(output, tgt_output).item()
+    return loss / len(loader)
 
 
-# --- 5. TIỆN ÍCH VẼ BIỂU ĐỒ ---
-def epoch_time(start_time, end_time):
-    elapsed_time = end_time - start_time
-    elapsed_mins = int(elapsed_time / 60)
-    elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
-    return elapsed_mins, elapsed_secs
+# ======================================================
+# 4. Plot
+# ======================================================
+def save_plots(train_losses, val_losses, prefix):
+    os.makedirs("reports", exist_ok=True)
 
-
-def save_plots(train_losses, val_losses, filename_prefix="model"):
-    if not os.path.exists('reports'):
-        os.makedirs('reports')
-
-    # Vẽ Loss
-    plt.figure(figsize=(10, 6))
-    plt.plot(train_losses, label='Train Loss', color='blue')
-    plt.plot(val_losses, label='Val Loss', color='red')
-    plt.title("Training & Validation Loss")
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
+    plt.figure()
+    plt.plot(train_losses, label="Train")
+    plt.plot(val_losses, label="Val")
     plt.legend()
-    plt.grid(True, alpha=0.3)  # Thêm lưới cho dễ nhìn
-    plt.savefig(f'reports/{filename_prefix}_loss.png')
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.grid(alpha=0.3)
+    plt.savefig(f"reports/{prefix}_loss.png")
     plt.close()
 
-    # Vẽ Perplexity
-    # Xử lý overflow cho PPL
-    def safe_exp(l):
-        try:
-            return math.exp(min(l, 50))  # Cap loss ở 50
-        except OverflowError:
-            return float('inf')
 
-    train_ppls = [safe_exp(l) for l in train_losses]
-    val_ppls = [safe_exp(l) for l in val_losses]
+# ======================================================
+# 5. MAIN FINETUNE
+# ======================================================
+def run_finetune():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Device:", device)
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(train_ppls, label='Train PPL', color='green')
-    plt.plot(val_ppls, label='Val PPL', color='orange')
-    plt.title("Training & Validation Perplexity")
-    plt.xlabel('Epochs')
-    plt.ylabel('Perplexity')
-    plt.yscale('log')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.savefig(f'reports/{filename_prefix}_ppl.png')
-    plt.close()
-    print(f"--> Đã lưu biểu đồ tại thư mục reports/")
+    # --------------------------
+    # Load VLSP data
+    # --------------------------
+    print("Loading VLSP dataset...")
+    dataset = load_from_disk(cfg.vlsp_data_path)
 
+    src_texts = [x[cfg.src_lang] for x in dataset]
+    tgt_texts = [x[cfg.tgt_lang] for x in dataset]
 
-# --- 6. MAIN ---
-def run_training():
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Device: {device}")
+    # --------------------------
+    # Load BPE vocab (MUST match pretrain)
+    # --------------------------
+    bpe_cfg = [v for v in cfg.vocab_configs if v["name"] == "bpe"][0]
+    vocab_src = Vocabulary.load_vocab(bpe_cfg["src_path"])
+    vocab_tgt = Vocabulary.load_vocab(bpe_cfg["tgt_path"])
 
-    # --- Hyperparameters Tối Ưu ---
-    BATCH_SIZE = cfg.batch_size
-    N_EPOCHS = cfg.n_epochs
-    CLIP = cfg.clip
-    PATIENCE = cfg.patience
+    full_dataset = BilingualDataset(
+        src_texts, tgt_texts, vocab_src, vocab_tgt, max_len=cfg.max_len
+    )
 
-    D_MODEL = cfg.d_model
-    N_LAYERS = cfg.n_layers
-    N_HEADS = cfg.n_heads
-    D_FF = cfg.d_ff
-    DROPOUT = cfg.dropout
-    MAX_LEN = cfg.max_len
+    # --------------------------
+    # Split train / valid (90/10)
+    # --------------------------
+    val_size = int(0.1 * len(full_dataset))
+    train_size = len(full_dataset) - val_size
+    train_ds, val_ds = random_split(full_dataset, [train_size, val_size])
 
-    # --- Load Data ---
-    print("--- Loading Data... ---")
-    try:
-        vocab_src = Vocabulary("data/shared_vocab/tokenizer_shared.json")
-        vocab_tgt = Vocabulary("data/shared_vocab/tokenizer_shared.json")
-        dataset = load_from_disk("data/iwslt2015_data")
-    except Exception as e:
-        print(f"Error loading data: {e}")
-        return
+    collate = Collate(vocab_src.pad_idx, vocab_tgt.pad_idx)
 
-    # Extract & Create Dataset
-    train_src = [item['vi'] for item in dataset['train']]
-    train_tgt = [item['en'] for item in dataset['train']]
-    val_src = [item['vi'] for item in dataset['validation']]
-    val_tgt = [item['en'] for item in dataset['validation']]
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, collate_fn=collate)
+    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, collate_fn=collate)
 
-    train_dataset = BilingualDataset(train_src, train_tgt, vocab_src, vocab_tgt, max_len=MAX_LEN)
-    val_dataset = BilingualDataset(val_src, val_tgt, vocab_src, vocab_tgt, max_len=MAX_LEN)
-
-    collate = Collate(pad_idx=vocab_src.pad_idx)
-
-    # Tối ưu DataLoader: Tăng workers, persistent_workers
-    train_iterator = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-                                collate_fn=collate, num_workers=4, pin_memory=True, persistent_workers=True)
-    valid_iterator = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False,
-                                collate_fn=collate, num_workers=4, pin_memory=True, persistent_workers=True)
-
-    # --- Model ---
+    # --------------------------
+    # Model
+    # --------------------------
     model = Transformer(
         src_vocab_size=len(vocab_src),
         tgt_vocab_size=len(vocab_tgt),
-        d_model=D_MODEL, n_layers=N_LAYERS, n_heads=N_HEADS, d_ff=D_FF,
-        dropout=DROPOUT, max_len=5000,
-        src_pad_idx=vocab_src.pad_idx, tgt_pad_idx=vocab_tgt.pad_idx
+        d_model=cfg.d_model,
+        n_layers=cfg.n_layers,
+        n_heads=cfg.n_heads,
+        d_ff=cfg.d_ff,
+        dropout=cfg.dropout,
+        max_len=5000,
+        src_pad_idx=vocab_src.pad_idx,
+        tgt_pad_idx=vocab_tgt.pad_idx
     ).to(device)
 
-    # --- Load checkpoint nếu tồn tại ---
-    if os.path.exists("transformer_best.pt"):
-        print(">>> Loading saved model: transformer_best.pt")
-        model.load_state_dict(torch.load("transformer_best.pt", map_location=device))
-    else:
-        print(">>> No saved model found, training from scratch.")
-
-
-    #share weights giữa encoder decoder và outputLayer
+    # Share embeddings
     model.src_embedding.emb.weight = model.tgt_embedding.emb.weight
     model.fc_out.weight = model.src_embedding.emb.weight
 
-    print(f'Mô hình có {sum(p.numel() for p in model.parameters() if p.requires_grad):,} tham số')
+    # --------------------------
+    # LOAD PRETRAINED BPE MODEL
+    # --------------------------
+    print("Loading pretrained model: transformer_last.pt")
+    model.load_state_dict(torch.load("transformer_last.pt", map_location=device))
 
-    # --- Optimizer & Loss ---
-    # THAY ĐỔI QUAN TRỌNG: Dùng AdamW thay vì Adam để có weight decay tốt hơn
-    optimizer = optim.AdamW(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9, weight_decay=1e-4)
 
-    scheduler = TransformerScheduler(optimizer, d_model=D_MODEL, warmup_steps=4000)
-    criterion = nn.CrossEntropyLoss(ignore_index=vocab_tgt.pad_idx, label_smoothing=0.1)
+    # --------------------------
+    # Optimizer & Loss (FINETUNE SETTINGS)
+    # --------------------------
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=5e-5,            # SMALL LR
+        betas=(0.9, 0.98),
+        eps=1e-9,
+        weight_decay=1e-4
+    )
 
-    # Khởi tạo Early Stopping
-    early_stopping = EarlyStopping(patience=PATIENCE, verbose=True, path='transformer_best.pt')
-
-    # Scaler cho Mixed Precision
+    scheduler = TransformerScheduler(optimizer, cfg.d_model, cfg.warmup_steps)
+    criterion = nn.CrossEntropyLoss(ignore_index=vocab_tgt.pad_idx, label_smoothing=cfg.label_smoothing)
+    early_stopping = EarlyStopping(patience=cfg.patience, path=cfg.vlsp_ckpt_path)
     scaler = GradScaler()
 
-    train_loss_history = []
-    valid_loss_history = []
+    train_losses, val_losses = [], []
 
-    print(f"--- Bắt đầu Training (Max {N_EPOCHS} epochs, Patience {PATIENCE}) ---")
+    # --------------------------
+    # FINETUNE LOOP
+    # --------------------------
+    for epoch in range(cfg.n_epochs):
+        start = time.time()
+        train_loss = train_epoch(model, train_loader, optimizer, scheduler, criterion, cfg.clip, device, scaler)
+        val_loss = evaluate(model, val_loader, criterion, device)
 
-    for epoch in range(N_EPOCHS):
-        start_time = time.time()
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
 
-        train_loss = train_epoch(model, train_iterator, optimizer, scheduler, criterion, CLIP, device, scaler)
-        valid_loss = evaluate(model, valid_iterator, criterion, device)
+        mins = int((time.time() - start) / 60)
+        print(f"Epoch {epoch+1:02} | {mins}m | Train {train_loss:.3f} | Val {val_loss:.3f}")
 
-        train_loss_history.append(train_loss)
-        valid_loss_history.append(valid_loss)
-
-        end_time = time.time()
-        epoch_mins, epoch_secs = epoch_time(start_time, end_time)
-
-        print(f'Epoch: {epoch + 1:02} | Time: {epoch_mins}m {epoch_secs}s')
-        print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {math.exp(train_loss):7.3f}')
-        print(f'\t Val. Loss: {valid_loss:.3f} |  Val. PPL: {math.exp(valid_loss):7.3f}')
-
-        # --- GỌI EARLY STOPPING ---
-        # Nó sẽ tự lưu model nếu tốt hơn, và trả về True nếu cần dừng
-        early_stopping(valid_loss, model)
-
+        early_stopping(val_loss, model)
         if early_stopping.early_stop:
-            print("--> Early stopping kích hoạt! Dừng train để tránh Overfitting/Explosion.")
+            print("Early stopping triggered.")
             break
 
-    save_plots(train_loss_history, valid_loss_history)
-    # Lưu model trạng thái cuối cùng (dù có thể không phải tốt nhất)
-    torch.save(model.state_dict(), 'transformer_last_state.pt')
-    print("--- Hoàn tất ---")
+    save_plots(train_losses, val_losses, cfg.vlsp_plot_prefix)
+    print("Finetuning finished.")
+    print("Best model saved at:", cfg.vlsp_ckpt_path)
 
 
 if __name__ == "__main__":
-    run_training()
+    run_finetune()

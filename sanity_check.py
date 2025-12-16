@@ -176,5 +176,3 @@ def test_sanity_translation(model, src_sentence, vocab_src, vocab_tgt, device, m
 
 if __name__ == "__main__":
     run_sanity_check()
-
-    

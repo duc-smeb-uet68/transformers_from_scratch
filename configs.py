@@ -26,4 +26,28 @@ class Config:
         # Đường dẫn lưu model
         self.model_path = 'weights/transformer_vi_en.pth'
 
+        self.vocab_configs = [
+            {
+                "name": "word",
+                "src_path": "data/vocab/vocab_src.json",
+                "tgt_path": "data/vocab/vocab_tgt.json",
+                "ckpt_path": "transformer_word.pt",
+                "plot_prefix": "word"
+            },
+            {
+                "name": "bpe",
+                "src_path": "data/vocab_bpe/tokenizet_vi.json",
+                "tgt_path": "data/vocab_bpe/tokenizer_en.json",
+                "ckpt_path": "transformer_bpe.pt",
+                "plot_prefix": "bpe"
+            },
+            {
+                "name": "shared",
+                "src_path": "data/shared_vocab/tokenizer_shared.json",
+                "tgt_path": "data/shared_vocab/tokenizer_shared.json",
+                "ckpt_path": "transformer_shared.pt",
+                "plot_prefix": "shared"
+            }
+        ]
+
 cfg = Config()
