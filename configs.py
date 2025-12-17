@@ -1,19 +1,16 @@
 class Config:
     def __init__(self):
-        # Thiết lập dữ liệu [cite: 4, 5]
         self.src_lang = 'vi'
         self.tgt_lang = 'en'
-        self.max_len = 128         # Độ dài tối đa của câu (để cắt/pad)
+        self.max_len = 128
         self.batch_size = 256
 
-        # Thiết lập Mô hình (Model Architecture) [cite: 10]
         self.d_model = 256
         self.n_heads = 4
         self.n_layers = 6
         self.d_ff = 1024
         self.dropout = 0.1
 
-        # Thiết lập Huấn luyện (Training) [cite: 27, 29]
         self.lr = 0.0005
         self.warmup_steps = 4000
         self.label_smoothing = 0.1

@@ -6,7 +6,7 @@ import time
 import math
 import os
 import numpy as np
-import matplotlib.pyplot as plt  # <--- [MỚI] Import thư viện vẽ hình
+import matplotlib.pyplot as plt
 from datasets import load_from_disk
 from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
@@ -17,7 +17,6 @@ from utils.dataset import BilingualDataset, Collate
 from utils.tokenizer import Vocabulary
 from configs import cfg
 
-# --- 1. CẤU HÌNH FINE-TUNE ---
 FT_CONFIG = {
     'dataset_path': 'data/vlsp',
     'load_model_path': cfg.model,
@@ -31,7 +30,6 @@ FT_CONFIG = {
 }
 
 
-# --- 2. HÀM VẼ BIỂU ĐỒ (MỚI) ---
 def save_ft_plots(train_losses, val_losses, output_dir='reports'):
     """Vẽ và lưu biểu đồ Loss & Perplexity"""
     if not os.path.exists(output_dir):
@@ -51,8 +49,7 @@ def save_ft_plots(train_losses, val_losses, output_dir='reports'):
     plt.savefig(f'{output_dir}/finetune_loss.png')
     plt.close()
 
-    # --- Biểu đồ 2: PERPLEXITY (PPL) ---
-    # PPL = exp(Loss). Cần xử lý trường hợp Loss quá lớn gây tràn số
+
     def safe_exp(l):
         try:
             val = math.exp(l)
@@ -77,7 +74,6 @@ def save_ft_plots(train_losses, val_losses, output_dir='reports'):
     print(f"--> Đã lưu biểu đồ tại: {output_dir}/finetune_loss.png và finetune_ppl.png")
 
 
-# --- 3. CÁC CLASS TIỆN ÍCH (Giữ nguyên) ---
 class EarlyStopping:
     def __init__(self, patience=5, delta=0, path='weights/checkpoint.pt', verbose=True):
         self.patience = patience
@@ -200,7 +196,6 @@ def epoch_time(start_time, end_time):
     return elapsed_mins, elapsed_secs
 
 
-# --- 4. MAIN FINE-TUNING FUNCTION ---
 def run_fine_tuning():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
@@ -304,7 +299,6 @@ def run_fine_tuning():
             print("Early stopping triggered!")
             break
 
-    # --- GỌI HÀM VẼ BIỂU ĐỒ SAU KHI TRAIN XONG ---
     save_ft_plots(train_loss_history, valid_loss_history)
 
     print("--- Fine-tuning Hoàn tất ---")

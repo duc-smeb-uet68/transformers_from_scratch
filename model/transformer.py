@@ -11,7 +11,6 @@ class Encoder(nn.Module):
     def __init__(self, d_model, n_layers, n_heads, d_ff, dropout):
         super(Encoder, self).__init__()
         # Tạo danh sách N lớp EncoderLayer
-        # ModuleList giúp PyTorch quản lý các layer này
         self.layers = nn.ModuleList([
             EncoderLayer(d_model, n_heads, d_ff, dropout)
             for _ in range(n_layers)

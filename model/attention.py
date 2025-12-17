@@ -45,7 +45,6 @@ class MultiHeadAttention(nn.Module):
         # 2. Chia nhỏ thành n_heads
         # Biến đổi: (Batch, Seq_len, D_model) -> (Batch, Seq_len, n_heads, d_head)
         # Sau đó đảo trục để n_heads lên trước: (Batch, n_heads, Seq_len, d_head)
-        # Việc này giúp tính toán song song các heads
         Q = Q.view(batch_size, -1, self.n_heads, self.d_head).transpose(1, 2)
         K = K.view(batch_size, -1, self.n_heads, self.d_head).transpose(1, 2)
         V = V.view(batch_size, -1, self.n_heads, self.d_head).transpose(1, 2)
@@ -73,10 +72,8 @@ class MultiHeadAttention(nn.Module):
         # Đảo trục lại: (Batch, Seq_len_Q, n_heads, d_head)
         out = out.transpose(1, 2).contiguous()
 
-        # Gom lại thành vector d_model ban đầu: (Batch, Seq_len_Q, D_model)
         out = out.view(batch_size, -1, self.d_model)
 
-        # 8. Lớp Linear cuối cùng
         out = self.fc_out(out)
 
         return out

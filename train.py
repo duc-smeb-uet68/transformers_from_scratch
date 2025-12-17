@@ -13,7 +13,6 @@ from tqdm import tqdm
 from translate import blue_score
 from configs import cfg
 
-# Import các module từ project của bạn
 
 from model.transformer import Transformer
 from utils.dataset import BilingualDataset, Collate
@@ -313,11 +312,6 @@ def run_training():
 
         # Load trọng số model
         model.load_state_dict(torch.load(BEST_MODEL_PATH, map_location=device))
-
-        # Vì file best không lưu epoch, bạn phải tự ước lượng hoặc chấp nhận start_epoch = 0
-        # Nếu bạn biết nó chết ở epoch 15, và best model lưu ở epoch trước đó, ví dụ epoch 12
-        # Bạn có thể gán thủ công:
-        # start_epoch = 12
 
         print("--> Đã load model weights. Optimizer sẽ được khởi tạo lại.")
     else:

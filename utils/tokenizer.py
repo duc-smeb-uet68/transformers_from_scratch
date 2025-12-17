@@ -16,16 +16,12 @@ UNK_IDX = 3
 
 class Vocabulary:
     def __init__(self, vocab_file):
-        # Load tokenizer đã train bằng build_vocab_bpe.py
         self.tokenizer = Tokenizer.from_file(vocab_file)
 
-        # Tạo mapping stoi (String to Index) để tương thích với Dataset cũ
         self.stoi = self.tokenizer.get_vocab()
 
-        # Tạo mapping itos (Index to String)
         self.itos = {v: k for k, v in self.stoi.items()}
 
-        # ID của các token đặc biệt
         self.pad_idx = self.stoi.get("<pad>", 0)
         self.sos_idx = self.stoi.get("<sos>", 1)
         self.eos_idx = self.stoi.get("<eos>", 2)

@@ -30,17 +30,13 @@ class BilingualDataset(Dataset):
         tgt_text = self.tgt_sentences[index]
 
         # 1. Chuyển từ -> số (Numericalize)
-        # Lưu ý: Ta lấy list số trước, chưa thêm SOS/EOS vội
         src_indices = self.src_vocab.numericalize(src_text)
         tgt_indices = self.tgt_vocab.numericalize(tgt_text)
 
 
         # 2. LOGIC CẮT CÂU (TRUNCATION) - QUAN TRỌNG
-        # Ta cần chừa lại 2 vị trí cho <sos> và <eos>
-        # Ví dụ: max_len=256 thì nội dung chỉ được dài 254
         max_seq_len = self.max_len - 2
 
-        # Nếu câu dài hơn giới hạn, ta cắt bớt phần đuôi
         if len(src_indices) > max_seq_len:
             src_indices = src_indices[:max_seq_len]
 
@@ -48,7 +44,6 @@ class BilingualDataset(Dataset):
             tgt_indices = tgt_indices[:max_seq_len]
 
         # 3. Thêm <sos> và <eos> vào đầu và cuối
-        # Lúc này đảm bảo tổng độ dài luôn <= self.max_len
         src_out = [self.src_vocab.stoi["<sos>"]] + src_indices + [self.src_vocab.stoi["<eos>"]]
         tgt_out = [self.tgt_vocab.stoi["<sos>"]] + tgt_indices + [self.tgt_vocab.stoi["<eos>"]]
 

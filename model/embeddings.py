@@ -11,8 +11,6 @@ class TokenEmbedding(nn.Module):
         self.emb = nn.Embedding(vocab_size, d_model)
 
     def forward(self, x):
-        # Theo paper gốc "Attention Is All You Need", ta nhân embedding với căn bậc 2 của d_model
-        # Lý do: Để giá trị của embedding có độ lớn tương đương với Positional Encoding sắp cộng vào
         return self.emb(x) * math.sqrt(self.d_model)
 
 
@@ -47,7 +45,6 @@ class PositionalEncoding(nn.Module):
         pe = pe.unsqueeze(0)
 
         # register_buffer giúp lưu trữ tensor này vào state_dict của mô hình
-        # nhưng không cập nhật nó trong quá trình backpropagation (vì nó cố định)
         self.register_buffer('pe', pe)
 
     def forward(self, x):
@@ -56,7 +53,6 @@ class PositionalEncoding(nn.Module):
             x: Input tensor kích thước (batch_size, seq_len, d_model)
         """
         # Cắt ma trận PE cho khớp với độ dài câu hiện tại (seq_len)
-        # x.size(1) chính là độ dài câu thực tế
         x = x + self.pe[:, :x.size(1)]
 
         return self.dropout(x)

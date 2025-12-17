@@ -34,7 +34,6 @@ def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, 
         all_finished = True
 
         for score, seq in k_beams:
-            # Nếu nhánh này đã kết thúc bằng <eos>, giữ nguyên đưa vào candidate
             if seq[-1] == end_symbol:
                 candidates.append((score, seq))
                 continue
@@ -49,12 +48,9 @@ def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, 
                 tgt_emb = model.positional_encoding(model.tgt_embedding(tgt_tensor))
                 # Decoder forward
                 out = model.decoder(tgt_emb, enc_src, tgt_mask, src_mask)
-                # Lấy output tại bước thời gian cuối cùng
                 prob = model.fc_out(out[:, -1, :])
-                # Tính log_softmax để cộng dồn score
                 log_prob = F.log_softmax(prob, dim=-1)
 
-            # Lấy top k token có xác suất cao nhất
             topk_log_prob, topk_idx = torch.topk(log_prob, beam_width, dim=-1)
 
             # Mở rộng nhánh
@@ -71,8 +67,6 @@ def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, 
         if all_finished:
             break
 
-        # Sắp xếp các ứng viên theo score giảm dần
-        # (Có thể cải tiến bằng cách chia score cho độ dài câu để normalize)
         alpha = 0.7
 
         ordered = sorted(
@@ -185,9 +179,6 @@ def calculate_bleu_score(data_iterator, src_vocab, tgt_vocab, model, device, max
                 tgt_text = tgt_vocab.decode(tgt_ids)
                 references.append(tgt_text)
 
-    # --- SỬA LỖI FORMAT SACREBLEU ---
-    # SacreBLEU cần references là list of list: [[ref1_cau1, ref1_cau2...], [ref2_cau1...]]
-    # Vì chỉ có 1 reference mỗi câu, ta bọc list references vào 1 list nữa.
 
     print(f"Sample Prediction: {hypotheses[0]}")
     print(f"Sample Reference : {references[0]}")
@@ -196,20 +187,13 @@ def calculate_bleu_score(data_iterator, src_vocab, tgt_vocab, model, device, max
     return bleu.score
 
 
-# --- 4. MAIN INTERACTION ---
-
-
-
-
 
 #Việc tính bleu em đã chuyẻn sang file eval_bleu. Hàm này em cứ để đây
 def blue_score():
-    # 1. Cấu hình thiết bị
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device đang dùng: {device}")
 
-    # 2. Load Vocabulary (BPE)
-    # Đảm bảo đường dẫn trỏ đúng file json bạn đã train
     try:
         vocab_src = Vocabulary(cfg.vocab_src)
         vocab_tgt = Vocabulary(cfg.vocab_tgt)
@@ -293,8 +277,6 @@ def load_model_and_translate():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
 
-    # 1. Load Vocabulary (BPE)
-    # Đảm bảo đường dẫn khớp với file đã train ở bước build_vocab_bpe.py
     vocab_src_path = cfg.vocab_src
     vocab_tgt_path = cfg.vocab_tgt
 
