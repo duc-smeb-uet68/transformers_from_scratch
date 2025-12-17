@@ -9,8 +9,9 @@ from tqdm import tqdm
 
 # Import module nội bộ
 from model.transformer import Transformer
-from utils.word_vocab import Vocabulary
+from utils.tokenizer import Vocabulary
 from utils.dataset import BilingualDataset, Collate
+from configs import cfg
 
 # --- 1. THUẬT TOÁN BEAM SEARCH (NÂNG CẤP) ---
 def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, device, beam_width=3):
@@ -78,8 +79,8 @@ def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, 
             candidates,
             # x[0] là score, x[1] là list token (sequence)
             # Ta lấy score chia cho (độ dài sequence ^ alpha)
-            # key=lambda x: x[0] / (len(x[1]) ** alpha),
-            key=lambda x: x[0],
+            key=lambda x: x[0] / (len(x[1]) ** alpha),
+            # key=lambda x: x[0],
             reverse=True
         )
 
@@ -196,6 +197,97 @@ def calculate_bleu_score(data_iterator, src_vocab, tgt_vocab, model, device, max
 
 
 # --- 4. MAIN INTERACTION ---
+
+
+
+
+
+#Việc tính bleu em đã chuyẻn sang file eval_bleu. Hàm này em cứ để đây
+def blue_score():
+    # 1. Cấu hình thiết bị
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Device đang dùng: {device}")
+
+    # 2. Load Vocabulary (BPE)
+    # Đảm bảo đường dẫn trỏ đúng file json bạn đã train
+    try:
+        vocab_src = Vocabulary(cfg.vocab_src)
+        vocab_tgt = Vocabulary(cfg.vocab_tgt)
+    except Exception as e:
+        print(f"Lỗi load vocab: {e}")
+        exit()
+
+    # 3. Load Model
+    # Các tham số này PHẢI KHỚP với file config hoặc lúc train
+    model = Transformer(
+        src_vocab_size=len(vocab_src),
+        tgt_vocab_size=len(vocab_tgt),
+        d_model= cfg.d_model,
+        n_layers=cfg.n_layers,
+        n_heads= cfg.n_heads,
+        d_ff= cfg.d_ff,
+        dropout= cfg.dropout,
+        max_len= 5000,
+        src_pad_idx=vocab_src.pad_idx,
+        tgt_pad_idx=vocab_tgt.pad_idx
+    ).to(device)
+
+    model.src_embedding.emb.weight = model.tgt_embedding.emb.weight
+    model.fc_out.weight = model.src_embedding.emb.weight
+
+    # Load trọng số đã train
+    if os.path.exists(cfg.model):
+        model.load_state_dict(torch.load(cfg.model, map_location=device))
+        print(f"--> Đã load trọng số {cfg.model}")
+    else:
+        print("CẢNH BÁO: Không tìm thấy file trọng số! Kết quả BLEU sẽ rất thấp.")
+
+    # 4. CHUẨN BỊ DATA ITERATOR (Phần quan trọng nhất)
+    print("\n--- Đang tải dữ liệu Test ---")
+    try:
+        # Ưu tiên load từ đĩa nếu đã lưu
+        dataset = load_from_disk('data/vlsp')
+        test_data = dataset['test']
+    except:
+        # Nếu không có thì tải từ mạng
+        print("========khoong có DATA ========")
+
+    # Tách danh sách câu nguồn và đích
+    test_src = [item['vi'] for item in test_data]
+    test_tgt = [item['en'] for item in test_data]
+
+    # Tạo Dataset class
+    test_dataset = BilingualDataset(
+        test_src,
+        test_tgt,
+        vocab_src,
+        vocab_tgt,
+        max_len=128
+    )
+
+    collate_fn = Collate(pad_idx=vocab_src.pad_idx)
+    test_iterator = DataLoader(
+        test_dataset,
+        batch_size= 1,
+        shuffle=False,
+        collate_fn=collate_fn
+    )
+
+
+    score = calculate_bleu_score(
+        data_iterator=test_iterator,
+        src_vocab=vocab_src,
+        tgt_vocab=vocab_tgt,
+        model=model,
+        device=device,
+        max_len=200
+    )
+
+    print(f"\n============================")
+    print(f"KẾT QUẢ BLEU SCORE: {score:.2f}")
+    print(f"============================")
+
+
 def load_model_and_translate():
     # Cấu hình thiết bị
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -203,8 +295,8 @@ def load_model_and_translate():
 
     # 1. Load Vocabulary (BPE)
     # Đảm bảo đường dẫn khớp với file đã train ở bước build_vocab_bpe.py
-    vocab_src_path = "data/shared_vocab/tokenizer_shared.json"
-    vocab_tgt_path = "data/shared_vocab/tokenizer_shared.json"
+    vocab_src_path = cfg.vocab_src
+    vocab_tgt_path = cfg.vocab_tgt
 
     if not os.path.exists(vocab_src_path) or not os.path.exists(vocab_tgt_path):
         print(f"Lỗi: Không tìm thấy file vocab tại {vocab_src_path}. Hãy chạy build_vocab_bpe.py trước.")
@@ -219,20 +311,20 @@ def load_model_and_translate():
     model = Transformer(
         src_vocab_size=len(vocab_src),
         tgt_vocab_size=len(vocab_tgt),
-        d_model=512,  # Khớp với train.py
-        n_layers=6,  # Khớp với train.py
-        n_heads=8,
-        d_ff=2048,
-        dropout=0.1,
+        d_model=cfg.d_model,  # Khớp với train.py
+        n_layers=cfg.n_layers,  # Khớp với train.py
+        n_heads=cfg.n_heads,
+        d_ff= cfg.d_ff,
+        dropout= cfg.dropout,
         max_len=5000,
         src_pad_idx=vocab_src.pad_idx,
         tgt_pad_idx=vocab_tgt.pad_idx
     ).to(device)
 
-    # 3. Load Trọng số (Weights)
-    model_path = 'transformer_last_state.pt'  # Ưu tiên load model tốt nhất
-    if not os.path.exists(model_path):
-        model_path = 'transformer_last.pt'
+    model.src_embedding.emb.weight = model.tgt_embedding.emb.weight
+    model.fc_out.weight = model.src_embedding.emb.weight
+
+    model_path = cfg.model
 
     if os.path.exists(model_path):
         model.load_state_dict(torch.load(model_path, map_location=device))
@@ -262,7 +354,7 @@ def load_model_and_translate():
                 model,
                 device,
                 max_len= 200,
-                use_beam=False  # Bật Beam Search
+                use_beam=True  # Bật Beam Search
             )
 
             end = time.time()
@@ -275,91 +367,6 @@ def load_model_and_translate():
         except Exception as e:
             print(f"Lỗi: {e}")
 
-def blue_score():
-    # 1. Cấu hình thiết bị
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Device đang dùng: {device}")
-
-    # 2. Load Vocabulary (BPE)
-    # Đảm bảo đường dẫn trỏ đúng file json bạn đã train
-    try:
-        vocab_src = Vocabulary("data/shared_vocab/tokenizer_shared.json")
-        vocab_tgt = Vocabulary("data/shared_vocab/tokenizer_shared.json")
-    except Exception as e:
-        print(f"Lỗi load vocab: {e}")
-        exit()
-
-    # 3. Load Model
-    # Các tham số này PHẢI KHỚP với file config hoặc lúc train
-    model = Transformer(
-        src_vocab_size=len(vocab_src),
-        tgt_vocab_size=len(vocab_tgt),
-        d_model=512,
-        n_layers=6,
-        n_heads=8,
-        d_ff=2048,
-        dropout=0.1,
-        max_len=5000,
-        src_pad_idx=vocab_src.pad_idx,
-        tgt_pad_idx=vocab_tgt.pad_idx
-    ).to(device)
-
-    # Load trọng số đã train
-    if os.path.exists('transformer_best.pt'):
-        model.load_state_dict(torch.load('transformer_best.pt', map_location=device))
-        print("--> Đã load trọng số 'transformer_best.pt'")
-    else:
-        print("CẢNH BÁO: Không tìm thấy file trọng số! Kết quả BLEU sẽ rất thấp.")
-
-    # 4. CHUẨN BỊ DATA ITERATOR (Phần quan trọng nhất)
-    print("\n--- Đang tải dữ liệu Test ---")
-    try:
-        # Ưu tiên load từ đĩa nếu đã lưu
-        dataset = load_from_disk("data/iwslt2015_data")
-        test_data = dataset['test']
-    except:
-        # Nếu không có thì tải từ mạng
-        dataset = load_dataset("nguyenvuhuy/iwslt2015-en-vi")
-        test_data = dataset['test']
-
-    # Tách danh sách câu nguồn và đích
-    test_src = [item['vi'] for item in test_data]
-    test_tgt = [item['en'] for item in test_data]
-
-    # Tạo Dataset class
-    test_dataset = BilingualDataset(
-        test_src,
-        test_tgt,
-        vocab_src,
-        vocab_tgt,
-        max_len=128  # Độ dài tối đa khi đánh giá
-    )
-
-    # Tạo DataLoader (Đây chính là data_iterator)
-    collate_fn = Collate(pad_idx=vocab_src.pad_idx)
-    test_iterator = DataLoader(
-        test_dataset,
-        batch_size=16,
-        shuffle=False,
-        collate_fn=collate_fn
-    )
-
-    # 5. Gọi hàm tính BLEU
-    # Truyền test_iterator vào hàm của bạn
-    score = calculate_bleu_score(
-        data_iterator=test_iterator,
-        src_vocab=vocab_src,
-        tgt_vocab=vocab_tgt,
-        model=model,
-        device=device,
-        max_len=200
-    )
-
-    print(f"\n============================")
-    print(f"KẾT QUẢ BLEU SCORE: {score:.2f}")
-    print(f"============================")
-
 
 if __name__ == "__main__":
     load_model_and_translate()
-    #blue_score()

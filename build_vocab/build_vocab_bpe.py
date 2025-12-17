@@ -1,51 +1,66 @@
 import os
-from datasets import load_dataset, load_from_disk
-from utils.bpe_vocab import train_bpe_tokenizer
+from datasets import load_from_disk
+from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders, processors
+
+# Tạo thư mục chứa vocab nếu chưa có
+if not os.path.exists('../data/vocab_bpe'):
+    os.makedirs('../data/vocab_bpe')
 
 
-def get_training_corpus(dataset, key, batch_size=1000):
-    """
-    Generator trả về các batch text để train tokenizer
-    """
-    for i in range(0, len(dataset), batch_size):
-        yield dataset[i: i + batch_size][key]
+def train_tokenizer(texts, save_path, vocab_size=10000):
+    # 1. Khởi tạo BPE Tokenizer
+    tokenizer = Tokenizer(models.BPE(unk_token="<unk>"))
+
+    # 2. Tiền xử lý: Tách theo byte (cho tiếng Việt/Anh đều ổn)
+    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+
+    # 3. Decoding: Ghép lại
+    tokenizer.decoder = decoders.ByteLevel()
+
+    # 4. Cấu hình Trainer
+    # Quan trọng: Thêm các token đặc biệt vào
+    trainer = trainers.BpeTrainer(
+        vocab_size=vocab_size,
+        special_tokens=["<pad>", "<sos>", "<eos>", "<unk>"],
+        initial_alphabet=pre_tokenizers.ByteLevel.alphabet()
+    )
+
+    # 5. Train
+    print(f"--- Đang train tokenizer cho {save_path} ...")
+    tokenizer.train_from_iterator(texts, trainer=trainer)
+
+    # 6. Lưu
+    tokenizer.save(save_path)
+    print(f"Đã lưu tokenizer tại: {save_path}")
+
+
+def get_training_corpus(dataset, key):
+    for i in range(0, len(dataset), 1000):
+        yield dataset[i: i + 1000][key]
 
 
 if __name__ == "__main__":
-    print("--- Đang tải dataset IWSLT2015 (Vi-En) ---")
-
-    # Load dataset (ưu tiên từ disk)
+    print("--- Đang tải dataset ---")
+    # Giả sử bạn đã chạy save_to_disk ở bước trước
     try:
-        dataset = load_from_disk("data/iwslt2015_data")
-        train_data = dataset["train"]
+        dataset = load_from_disk("../data/iwslt2015_data")
+        train_data = dataset['train']
     except:
+        from datasets import load_dataset
+
         dataset = load_dataset("nguyenvuhuy/iwslt2015-en-vi")
-        dataset.save_to_disk("data/iwslt2015_data")
-        train_data = dataset["train"]
+        train_data = dataset['train']
 
-    # Tạo thư mục lưu vocab
-    os.makedirs("data/vocab_bpe", exist_ok=True)
-
-    # ========================
-    # Train BPE tokenizer VI
-    # ========================
-    print("\n--- Training BPE tokenizer (VI) ---")
-    tokenizer_vi = train_bpe_tokenizer(
-        get_training_corpus(train_data, "vi"),
-        vocab_size=8000
+    # Train Tokenizer tiếng Việt
+    train_tokenizer(
+        get_training_corpus(train_data, 'vi'),
+        '../data/vocab_bpe/tokenizer_vi.json',
+        vocab_size=8000  # Tiếng Việt
     )
-    tokenizer_vi.save("data/vocab_bpe/tokenizer_vi.json")
-    print("✔ Đã lưu tokenizer_vi.json")
 
-    # ========================
-    # Train BPE tokenizer EN
-    # ========================
-    print("\n--- Training BPE tokenizer (EN) ---")
-    tokenizer_en = train_bpe_tokenizer(
-        get_training_corpus(train_data, "en"),
-        vocab_size=8000
+    # Train Tokenizer tiếng Anh
+    train_tokenizer(
+        get_training_corpus(train_data, 'en'),
+        '../data/vocab_bpe/tokenizer_en.json',
+        vocab_size=8000  # Tiếng Anh
     )
-    tokenizer_en.save("data/vocab_bpe/tokenizer_en.json")
-    print("✔ Đã lưu tokenizer_en.json")
-
-    print("\n=== HOÀN TẤT TRAIN BPE VOCAB ===")

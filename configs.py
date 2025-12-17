@@ -4,50 +4,38 @@ class Config:
         self.src_lang = 'vi'
         self.tgt_lang = 'en'
         self.max_len = 128         # Độ dài tối đa của câu (để cắt/pad)
-        self.batch_size = 32
+        self.batch_size = 256
 
         # Thiết lập Mô hình (Model Architecture) [cite: 10]
-        self.d_model = 512        # Kích thước vector embedding
-        self.n_heads = 8          # Số lượng Head trong Multi-Head Attention
-        self.n_layers = 6         # Số lớp Encoder và Decoder
-        self.d_ff = 2048          # Kích thước lớp ẩn trong Feed Forward Network
+        self.d_model = 256
+        self.n_heads = 4
+        self.n_layers = 6
+        self.d_ff = 1024
         self.dropout = 0.1
 
         # Thiết lập Huấn luyện (Training) [cite: 27, 29]
-        self.lr = 0.0001          # Learning rate
-        #self.epochs = 20
-        self.warmup_steps = 4000  # Cho Scheduler
-        self.label_smoothing = 0.1 # Kỹ thuật giúp model đỡ overfit
+        self.lr = 0.0005
+        self.warmup_steps = 4000
+        self.label_smoothing = 0.1
+        self.weight_decay = 1e-4
 
-        self.n_epochs = 50          # Đặt cao lên, Early Stopping sẽ tự dừng
-        self.clip = 1.0             # Gradient Clipping
-        self.patience = 5           # Dừng nếu Val Loss không giảm sau 5 epoch
+        self.n_epochs = 60
+        self.clip = 1.0
+        self.patience = 6
 
-        # Đường dẫn lưu model
-        self.model_path = 'weights/transformer_vi_en.pth'
 
-        self.vocab_configs = [
-            {
-                "name": "word",
-                "src_path": "data/vocab/vocab_src.json",
-                "tgt_path": "data/vocab/vocab_tgt.json",
-                "ckpt_path": "transformer_word.pt",
-                "plot_prefix": "word"
-            },
-            {
-                "name": "bpe",
-                "src_path": "data/vocab_bpe/tokenizet_vi.json",
-                "tgt_path": "data/vocab_bpe/tokenizer_en.json",
-                "ckpt_path": "transformer_bpe.pt",
-                "plot_prefix": "bpe"
-            },
-            {
-                "name": "shared",
-                "src_path": "data/shared_vocab/tokenizer_shared.json",
-                "tgt_path": "data/shared_vocab/tokenizer_shared.json",
-                "ckpt_path": "transformer_shared.pt",
-                "plot_prefix": "shared"
-            }
-        ]
+        self.vocab_src = 'vocab/shared_vocab/tokenizer_shared.json'
+        self.vocab_tgt = 'vocab/shared_vocab/tokenizer_shared.json'
+
+        self.iwslt_data = 'data/iwslt2015_data'
+        self.vlsp_data = 'data/vlsp'
+
+        self.finetune_model = 'weights/fine_tune.pt'
+        self.pretrain_iwslt = 'weights/iwslt_best.pt'
+        self.pretrain_vlsp = 'weights/vlsp_best.pt'
+
+        self.model = self.finetune_model # chọn model ở đây
+
+        self.checkpoint = 'checkpoint/checkpoint.pt'
 
 cfg = Config()
