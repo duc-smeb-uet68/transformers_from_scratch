@@ -1,6 +1,5 @@
-# Transformer from Scratch - Dich may Viet-Anh
+# Transformer from Scratch - Dich may Viet-Anh + finetuning trên bộ dữ liệu y tế
 
-Xay dung mo hinh dich may Viet -> Anh bang kien truc **Transformer** (code from scratch), su dung PyTorch.
 
 > Bai tap lon mon Xu ly Ngon ngu Tu nhien (NLP).
 
