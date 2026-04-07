@@ -264,6 +264,15 @@ self.model = self.finetune_model    # weights/fine_tune.pt
 
 ## Ket qua
 
+### BLEU Score
+
+| Model | Du lieu huan luyen | BLEU Score |
+|---|---|---|
+| Pre-trained (IWSLT) | IWSLT 2015 | **34.17** |
+| Fine-tuned (VLSP) | IWSLT 2015 + VLSP | **47.56** |
+
+> Fine-tune tren du lieu chuyen nganh (VLSP y te) giup tang BLEU score them **+13.39 diem** so voi chi pre-train.
+
 ### Bieu do huan luyen
 
 Cac bieu do Loss va Perplexity duoc luu tu dong vao thu muc `reports/` sau khi huan luyen.
